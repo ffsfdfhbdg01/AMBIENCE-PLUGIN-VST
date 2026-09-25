@@ -11,6 +11,15 @@ Przeznaczenie: postprodukcja dźwięku w filmie — dopasowanie perspektywy dial
 
 ![Interfejs](docs/img/ui.png)
 
+## ⬇️ Pobierz
+
+Gotowe instalatory są w zakładce **[Releases](../../releases/latest)**:
+
+- **Windows:** `Ambience-x.y.z-Windows-Setup.exe`
+- **macOS:** `Ambience-x.y.z-macOS.pkg`
+
+Strona wydania zawiera instrukcję instalacji krok po kroku.
+
 - Specyfikacja projektu: [`PROMPT.md`](PROMPT.md)
 - Modele, wzory, parametry i wyniki testów: [`docs/DESIGN.md`](docs/DESIGN.md)
 
