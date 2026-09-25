@@ -1,0 +1,125 @@
+#pragma once
+
+#include <juce_audio_processors/juce_audio_processors.h>
+
+#include "PluginProcessor.h"
+#include "ui/LookAndFeel.h"
+#include "ui/Meters.h"
+#include "ui/StageView.h"
+
+namespace ui
+{
+// Rotary knob with a caption and an editable value box. Cmd/Ctrl-drag = fine adjustment.
+class Knob : public juce::Component
+{
+public:
+    Knob (juce::AudioProcessorValueTreeState& state, const char* paramId, const juce::String& caption, const juce::String& tooltip);
+    void resized() override;
+
+    class FineSlider : public juce::Slider
+    {
+    public:
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            setMouseDragSensitivity (e.mods.isCommandDown() || e.mods.isCtrlDown() ? 1400 : 220);
+            juce::Slider::mouseDown (e);
+        }
+        void mouseDrag (const juce::MouseEvent& e) override
+        {
+            setMouseDragSensitivity (e.mods.isCommandDown() || e.mods.isCtrlDown() ? 1400 : 220);
+            juce::Slider::mouseDrag (e);
+        }
+    };
+
+    FineSlider slider;
+    juce::Label caption;
+
+private:
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
+};
+
+// Segmented radio control bound to a choice parameter.
+class Segmented : public juce::Component
+{
+public:
+    Segmented (juce::AudioProcessorValueTreeState& state, const char* paramId, const juce::StringArray& labels, const juce::String& tooltip);
+    void resized() override;
+    void setEnabledAll (bool e);
+
+private:
+    juce::OwnedArray<juce::TextButton> buttons;
+    juce::ParameterAttachment attachment;
+};
+
+class Card : public juce::Component
+{
+public:
+    explicit Card (const juce::String& t) : title (t) { setInterceptsMouseClicks (false, true); }
+    void paint (juce::Graphics& g) override;
+    juce::String title;
+};
+} // namespace ui
+
+class AmbienceEditor : public juce::AudioProcessorEditor, private juce::Timer
+{
+public:
+    explicit AmbienceEditor (AmbienceProcessor&);
+    ~AmbienceEditor() override;
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    bool keyPressed (const juce::KeyPress&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+
+    static constexpr int baseWidth = 940;
+    static constexpr int baseHeight = 640;
+
+private:
+    void timerCallback() override;
+    void layoutContent();
+    void refreshPresetList();
+    void showPresetMenu();
+    void savePresetDialog();
+    void showScaleMenu();
+    void switchAB (int slot);
+    void setScale (int percent);
+
+    AmbienceProcessor& proc;
+    ui::AmbienceLookAndFeel lnf;
+    juce::TooltipWindow tooltips { this, 600 };
+
+    juce::Component content;
+
+    // Header
+    juce::ComboBox presetBox;
+    juce::TextButton prevBtn { juce::String::fromUTF8 ("\xe2\x80\xb9") }, nextBtn { juce::String::fromUTF8 ("\xe2\x80\xba") },
+        saveBtn { "Save" }, menuBtn { juce::String::fromUTF8 ("\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2") };
+    juce::TextButton undoBtn { "Undo" }, redoBtn { "Redo" }, abA { "A" }, abB { "B" }, scaleBtn { "100%" };
+
+    // Toolbar
+    ui::Segmented inputSeg, renderSeg;
+    juce::ToggleButton monoSafeToggle { "Mono-safe" }, autoGainToggle { "Auto Gain" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> monoSafeAtt, autoGainAtt;
+    juce::TextButton advancedBtn { "Advanced" };
+    juce::Label statusLabel;
+
+    // Main
+    ui::StageView stage;
+    ui::Card positionCard { "POSITION" }, roomCard { "ROOM" }, obstacleCard { "OBSTACLE" }, outputCard { "OUTPUT" };
+    ui::Knob distanceKnob, panKnob, widthKnob, roomLevelKnob, amountKnob, sizeKnob, outputKnob;
+    juce::ComboBox roomBox, obstacleBox, materialBox;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> roomAtt, obstacleAtt, materialAtt;
+    ui::Meters meters;
+
+    // Advanced panel
+    class AdvancedPanel;
+    std::unique_ptr<AdvancedPanel> advanced;
+
+    std::array<juce::ValueTree, 2> abSlots;
+    int abCurrent = 0;
+    bool initialised = false;
+    juce::String lastPresetName;
+    juce::StringArray lastUserList;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AmbienceEditor)
+};

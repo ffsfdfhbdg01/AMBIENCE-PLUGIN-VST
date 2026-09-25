@@ -17,9 +17,9 @@ target_include_directories(ambience_dsp PUBLIC Source)
 target_compile_features(ambience_dsp PUBLIC cxx_std_20)
 set_target_properties(ambience_dsp PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(MSVC)
-    target_compile_options(ambience_dsp PRIVATE /W4 /fp:fast)
+    target_compile_options(ambience_dsp PRIVATE /W4)
 else()
-    target_compile_options(ambience_dsp PRIVATE -Wall -Wextra -Wno-unused-parameter)
+    target_compile_options(ambience_dsp PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-float-equal)
 endif()
 
 if(AMBIENCE_BUILD_TESTS)
@@ -79,6 +79,10 @@ if(AMBIENCE_BUILD_PLUGIN)
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0
         JUCE_DISPLAY_SPLASH_SCREEN=0)
+
+    if(NOT MSVC)
+        target_compile_options(Ambience PRIVATE -Wno-float-equal)
+    endif()
 
     target_link_libraries(Ambience
         PRIVATE
