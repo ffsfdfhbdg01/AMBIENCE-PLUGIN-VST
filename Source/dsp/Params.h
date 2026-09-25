@@ -65,6 +65,8 @@ namespace pid
     inline constexpr const char* autoGain = "autoGain";
     inline constexpr const char* autoGainRange = "autoGainRange";
     inline constexpr const char* output = "output";
+    inline constexpr const char* monoDepth = "monoDepth";
+    inline constexpr const char* eqAmbience = "eqAmbience";
 } // namespace pid
 
 inline const std::vector<ParamSpec>& paramSpecs()
@@ -104,6 +106,8 @@ inline const std::vector<ParamSpec>& paramSpecs()
         { pid::autoGain, "Auto Gain", K::toggle, 0, 1, 0, 1, S::linear, "", {} },
         { pid::autoGainRange, "Auto Gain Range", K::floating, 0, 36, 24, 0.5f, S::linear, "dB", {} },
         { pid::output, "Output", K::floating, -24, 24, 0, 0.1f, S::linear, "dB", {} },
+        { pid::monoDepth, "Mono Depth", K::toggle, 0, 1, 0, 1, S::linear, "", {} },
+        { pid::eqAmbience, "Equalized Ambience", K::toggle, 0, 1, 1, 1, S::linear, "", {} },
     };
     return specs;
 }
@@ -145,6 +149,8 @@ struct EngineParams
     bool autoGain = false;
     float autoGainRange = 24;
     float output = 0;
+    bool monoDepth = false; // mono output: depth cues only (distance, air, room, obstacle)
+    bool eqAmbience = true; // automatic distance/position EQ (air absorption, proximity, position shading)
 
     // Sets a value by parameter ID (plain units). Unknown IDs are ignored.
     void set (const std::string& id, float v)
@@ -179,6 +185,8 @@ struct EngineParams
         else if (id == pid::autoGain) autoGain = b();
         else if (id == pid::autoGainRange) autoGainRange = v;
         else if (id == pid::output) output = v;
+        else if (id == pid::monoDepth) monoDepth = b();
+        else if (id == pid::eqAmbience) eqAmbience = b();
     }
 };
 
@@ -214,6 +222,9 @@ inline const std::vector<FactoryPreset>& factoryPresets()
         { "Street from Inside a Car", { { pid::obstacle, 2 }, { pid::material, 7 }, { pid::distance, 6 }, { pid::room, 1 } } },
         { "Wide Ambience", { { pid::inputMode, 2 }, { pid::width, 150 }, { pid::bassMono, 5 } } },
         { "Narrow Ambience", { { pid::inputMode, 2 }, { pid::width, 50 } } },
+        { "Mono Dialogue - Medium Shot", { { pid::monoDepth, 1 }, { pid::inputMode, 1 }, { pid::recDistance, 0.5f }, { pid::distance, 3 }, { pid::room, 8 }, { pid::roomLevel, -3 } } },
+        { "Mono Dialogue - Wide Shot", { { pid::monoDepth, 1 }, { pid::inputMode, 1 }, { pid::recDistance, 0.5f }, { pid::distance, 9 }, { pid::room, 7 }, { pid::roomLevel, -1 } } },
+        { "Mono Dialogue - Next Room", { { pid::monoDepth, 1 }, { pid::inputMode, 1 }, { pid::recDistance, 0.5f }, { pid::distance, 4 }, { pid::room, 8 }, { pid::obstacle, 2 }, { pid::material, 4 } } },
     };
     return presets;
 }

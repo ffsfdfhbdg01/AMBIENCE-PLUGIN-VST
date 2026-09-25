@@ -331,6 +331,9 @@ AmbienceEditor::AmbienceEditor (AmbienceProcessor& p)
     content.addAndMakeVisible (renderSeg);
     content.addAndMakeVisible (monoSafeToggle);
     content.addAndMakeVisible (autoGainToggle);
+    content.addAndMakeVisible (monoDepthToggle);
+    monoDepthToggle.setTooltip ("Mono Depth: mono output (L = R) for mono dialogue. Only depth cues act: distance, air, room (true mono reverb), obstacle. Pan, width and time differences are off.");
+    monoDepthAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, pid::monoDepth, monoDepthToggle);
     content.addAndMakeVisible (advancedBtn);
     content.addAndMakeVisible (statusLabel);
     monoSafeToggle.setTooltip ("Limits and band-limits time panning so the mono fold-down stays within 3 dB per third-octave.");
@@ -340,7 +343,8 @@ AmbienceEditor::AmbienceEditor (AmbienceProcessor& p)
     advancedBtn.setClickingTogglesState (true);
     advancedBtn.onClick = [this] { advanced->setVisible (advancedBtn.getToggleState()); };
     statusLabel.setFont (ui::AmbienceLookAndFeel::font (11.5f, true));
-    statusLabel.setJustificationType (juce::Justification::centredRight);
+    statusLabel.setJustificationType (juce::Justification::centredLeft);
+    statusLabel.setInterceptsMouseClicks (false, false);
 
     // Main
     content.addAndMakeVisible (stage);
@@ -349,6 +353,11 @@ AmbienceEditor::AmbienceEditor (AmbienceProcessor& p)
     for (auto* k : { &distanceKnob, &panKnob, &widthKnob, &roomLevelKnob, &amountKnob, &sizeKnob, &outputKnob })
         content.addAndMakeVisible (k);
     content.addAndMakeVisible (meters);
+    content.addAndMakeVisible (eqToggle);
+    eqToggle.setTooltip ("Equalized Ambience (on by default): automatic EQ from distance and position — air absorption (ISO 9613-1), "
+                         "removal of close-mic proximity bass and a gentle high-frequency shading on the side away from the source. "
+                         "Off: only level, timing and room change; the tone stays as recorded.");
+    eqAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, pid::eqAmbience, eqToggle);
 
     auto fillCombo = [] (juce::ComboBox& box, const char* id)
     {
@@ -478,10 +487,10 @@ void AmbienceEditor::layoutContent()
     t.removeFromLeft (16);
     renderSeg.setBounds (t.removeFromLeft (222).withTrimmedLeft (56).reduced (0, 3));
     t.removeFromLeft (16);
-    monoSafeToggle.setBounds (t.removeFromLeft (110));
-    autoGainToggle.setBounds (t.removeFromLeft (110));
+    monoSafeToggle.setBounds (t.removeFromLeft (108));
+    autoGainToggle.setBounds (t.removeFromLeft (106));
+    monoDepthToggle.setBounds (t.removeFromLeft (118));
     advancedBtn.setBounds (t.removeFromRight (90).reduced (0, 3));
-    statusLabel.setBounds (t.withTrimmedRight (8));
 
     area.removeFromTop (10);
     area.removeFromBottom (16);
@@ -489,9 +498,12 @@ void AmbienceEditor::layoutContent()
     area.removeFromRight (16);
     stage.setBounds (area);
     advanced->setBounds (area);
+    statusLabel.setBounds (area.reduced (14, 10).removeFromTop (16).withTrimmedRight (140));
+    statusLabel.toFront (false);
 
     auto pos = right.removeFromTop (138);
     positionCard.setBounds (pos);
+    eqToggle.setBounds (pos.getRight() - 162, pos.getY() + 4, 156, 22);
     {
         auto k = pos.reduced (8, 0).withTrimmedTop (26).withTrimmedBottom (8);
         const int w = k.getWidth() / 3;
@@ -531,7 +543,9 @@ void AmbienceEditor::layoutContent()
 
 void AmbienceEditor::timerCallback()
 {
-    const bool mono = proc.isMonoOutput();
+    const bool monoTrack = proc.isMonoOutput();
+    const bool monoDepth = proc.apvts.getRawParameterValue (pid::monoDepth)->load() > 0.5f;
+    const bool mono = monoTrack || monoDepth;
     stage.setMonoOutput (mono);
     panKnob.setEnabled (! mono);
     widthKnob.setEnabled (! mono);
@@ -576,9 +590,14 @@ void AmbienceEditor::timerCallback()
         statusLabel.setText (juce::String::fromUTF8 ("\xe2\x9a\xa0 Negative correlation \xe2\x80\x94 check mono"), juce::dontSendNotification);
         statusLabel.setColour (juce::Label::textColourId, col::warn);
     }
+    else if (monoDepth && ! monoTrack)
+    {
+        statusLabel.setText (juce::String::fromUTF8 ("MONO DEPTH \xe2\x80\x94 mono output, depth only"), juce::dontSendNotification);
+        statusLabel.setColour (juce::Label::textColourId, col::accent);
+    }
     else if (mono)
     {
-        statusLabel.setText ("Mono output: pan & width inactive", juce::dontSendNotification);
+        statusLabel.setText (juce::String::fromUTF8 ("Mono track \xe2\x80\x94 depth only (pan & width inactive)"), juce::dontSendNotification);
         statusLabel.setColour (juce::Label::textColourId, col::textDim);
     }
     else

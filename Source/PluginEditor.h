@@ -120,8 +120,9 @@ private:
 
     // Toolbar
     ui::Segmented inputSeg, renderSeg;
-    juce::ToggleButton monoSafeToggle { "Mono-safe" }, autoGainToggle { "Auto Gain" };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> monoSafeAtt, autoGainAtt;
+    juce::ToggleButton monoSafeToggle { "Mono-safe" }, autoGainToggle { "Auto Gain" }, monoDepthToggle { "Mono Depth" },
+        eqToggle { "Equalized Ambience" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> monoSafeAtt, autoGainAtt, monoDepthAtt, eqAtt;
     juce::TextButton advancedBtn { "Advanced" };
     juce::Label statusLabel;
 

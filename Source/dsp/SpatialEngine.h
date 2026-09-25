@@ -90,13 +90,15 @@ private:
 
     // Smoothed control values (per tick)
     Smooth sLogDist, sLogRec, sRolloff, sPan, sTimePan, sPsi, sRho, sMonoSafe, sWidth, sPropMix,
-        sMicB, sAmtObs, sAmtOcc, sBassMix, sAutoGain, sOutput, sRoomLevel, sDecay;
+        sMicB, sAmtObs, sAmtOcc, sBassMix, sAutoGain, sOutput, sRoomLevel, sDecay, sMonoDepth, sEq;
     double tickCoeff = 0.0, fastCoeff = 0.0;
 
     // Per-sample ramps
     Ramp rDirect, rGL, rGR, rKs, rTauL, rTauR, rProp, rPropMix, rWS, rWD, rBassMix, rRho, rHpG, rOut, rRoomX, rMonoOut;
     std::array<Ramp, 4> rHpDelay, rHpGain; // [source*2 + ear]
-    Ramp rSafe, rPsiIn;
+    Ramp rSafe, rPsiIn, rMonoDepth, rMonoGain;
+    Biquad posEqL, posEqR;
+    bool posEqActive = false;
 
     // DSP state
     FirstOrder prox[2];

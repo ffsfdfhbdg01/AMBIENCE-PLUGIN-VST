@@ -130,7 +130,8 @@ void SpatialEngine::computeTargets() noexcept
     sWidth.target = monoOut ? 1.0 : std::clamp ((double) p.width, 0.0, 200.0) / 100.0;
     sPropMix.target = p.propDelay ? 1.0 : 0.0;
     static const double micB[3] = { 0.0, 0.5, 1.0 }; // gradient share of a 1st-order microphone
-    sMicB.target = micB[std::clamp (p.micPattern, 0, 2)];
+    sMicB.target = p.eqAmbience ? micB[std::clamp (p.micPattern, 0, 2)] : 0.0;
+    sEq.target = p.eqAmbience ? 1.0 : 0.0;
     sAmtObs.target = p.obstacle == 1 ? std::clamp ((double) p.amount, 0.0, 100.0) / 100.0 : 0.0;
     sAmtOcc.target = p.obstacle == 2 ? std::clamp ((double) p.amount, 0.0, 100.0) / 100.0 : 0.0;
     sBassMix.target = (p.bassMono > 0 && ! monoOut) ? 1.0 : 0.0;
@@ -138,6 +139,7 @@ void SpatialEngine::computeTargets() noexcept
     sRoomLevel.target = std::clamp ((double) p.roomLevel, -24.0, 12.0);
     sDecay.target = std::clamp ((double) p.decay, 50.0, 200.0) / 100.0;
     sAutoGain.target = p.autoGain ? autoGainTargetDb : 0.0;
+    sMonoDepth.target = (p.monoDepth || monoOut) ? 1.0 : 0.0;
 
     if (p.bassMono > 0 && p.bassMono != bassFreqIndex)
     {
@@ -204,7 +206,7 @@ void SpatialEngine::runFits (bool full) noexcept
     const int iterations = full ? 25 : 6;
 
     // --- Air absorption (ISO 9613-1), relative to the recording distance.
-    const bool airOn = p.airAbsorption;
+    const bool airOn = p.airAbsorption && p.eqAmbience; // part of the automatic "Equalized Ambience" EQ
     const double dr = airOn ? std::max (0.0, (double) std::clamp (p.distance, 0.1f, 1000.0f) - (double) p.recDistance) : 0.0;
     const bool airDirty = airOn != airFitOn || std::abs (dr - airFitDr) > 1.0e-3 * (1.0 + dr)
                           || (airOn && (std::abs (p.temperature - airFitT) > 0.01 || std::abs (p.humidity - airFitH) > 0.01));
@@ -312,13 +314,13 @@ void SpatialEngine::controlTick (bool snap) noexcept
     if (snap)
     {
         for (Smooth* s : { &sLogDist, &sLogRec, &sRolloff, &sPan, &sTimePan, &sPsi, &sRho, &sMonoSafe, &sWidth, &sPropMix,
-                           &sMicB, &sAmtObs, &sAmtOcc, &sBassMix, &sOutput, &sRoomLevel, &sDecay })
+                           &sMicB, &sAmtObs, &sAmtOcc, &sBassMix, &sOutput, &sRoomLevel, &sDecay, &sMonoDepth, &sEq })
             s->snap();
     }
     else
     {
         for (Smooth* s : { &sLogDist, &sLogRec, &sRolloff, &sPan, &sTimePan, &sPsi, &sRho, &sMonoSafe, &sWidth, &sPropMix,
-                           &sMicB, &sAmtObs, &sAmtOcc, &sBassMix, &sOutput, &sRoomLevel, &sDecay })
+                           &sMicB, &sAmtObs, &sAmtOcc, &sBassMix, &sOutput, &sRoomLevel, &sDecay, &sMonoDepth, &sEq })
             s->tick (tickCoeff);
     }
 
@@ -382,6 +384,24 @@ void SpatialEngine::controlTick (bool snap) noexcept
     setRamp (rGL, GL);
     setRamp (rGR, GR);
     setRamp (rKs, std::min (GL, GR));
+
+    // Position EQ (Equalized Ambience): the channel away from the source gets a gentle high-shelf
+    // cut growing with |pan| — a mild head-shadow-like spectral cue on top of level/time panning
+    // (max -2.5 dB above ~5 kHz; listening calibration). Applied to M only, so Width stays mono-safe.
+    {
+        constexpr double maxCutDb = -2.5;
+        const double eq = sEq.cur;
+        const double cutL = maxCutDb * eq * std::max (0.0, pan);
+        const double cutR = maxCutDb * eq * std::max (0.0, -pan);
+        posEqActive = cutL != 0.0 || cutR != 0.0;
+        posEqL.set (designBiquadHz (BiquadType::highShelf, fs, 5000.0, 0.707, cutL));
+        posEqR.set (designBiquadHz (BiquadType::highShelf, fs, 5000.0, 0.707, cutR));
+        if (! posEqActive)
+        {
+            posEqL.reset();
+            posEqR.reset();
+        }
+    }
     const double safe = sMonoSafe.cur;
     setRamp (rSafe, safe);
     const double tauMax = lerp (fullMaxTime, monoSafeMaxTime, safe) * fs;
@@ -471,6 +491,8 @@ void SpatialEngine::controlTick (bool snap) noexcept
     autoGainCurrentDb = sAutoGain.cur;
     setRamp (rOut, dbToGain (occlusion.broadbandDb() + sAutoGain.cur + sOutput.cur));
     setRamp (rMonoOut, 0.5 / lerp (gc, 1.0, psi));
+    setRamp (rMonoDepth, sMonoDepth.cur);
+    setRamp (rMonoGain, lerp (gc, 1.0, psi)); // same level as a centred source
 
     decorActive = wd > 0.0 || rWD.cur != 0.0f;
     ++tickCounter;
@@ -524,7 +546,9 @@ void SpatialEngine::updateAutoGainModel() noexcept
         }
         double out;
         if (monoOut)
-            out = pDirect + roomPower * rMonoOut.tgt * rMonoOut.tgt * 2.0;
+            out = pDirect + roomPower;
+        else if (sMonoDepth.target > 0.5) // L = R = g * mono
+            out = (pDirect + roomPower) * 2.0 * rMonoGain.tgt * rMonoGain.tgt;
         else
             out = pDirect * panPower + roomPower;
         out *= std::pow (10.0, (occlusion.currentSectionsDb (k) + occlusion.broadbandDb()) / 10.0);
@@ -572,7 +596,7 @@ void SpatialEngine::process (const float* const* in, int numIn, float* const* ou
 void SpatialEngine::processSample (float xL, float xR, float& oL, float& oR) noexcept
 {
     for (Ramp* r : { &rDirect, &rGL, &rGR, &rKs, &rTauL, &rTauR, &rProp, &rPropMix, &rWS, &rWD, &rBassMix, &rRho, &rHpG,
-                     &rOut, &rRoomX, &rMonoOut, &rSafe, &rPsiIn })
+                     &rOut, &rRoomX, &rMonoOut, &rSafe, &rPsiIn, &rMonoDepth, &rMonoGain })
         r->step();
 
     // Input: mid/side of the source. Stereo sources keep S (scaled by "stereoness" psi).
@@ -657,8 +681,13 @@ void SpatialEngine::processSample (float xL, float xR, float& oL, float& oR) noe
         const float full = timeLineM[0].read (tauSamples);
         return safe * bandLimited + (1.0f - safe) * full;
     };
-    const float chL = timeChannel (rTauL.cur);
-    const float chR = timeChannel (rTauR.cur);
+    float chL = timeChannel (rTauL.cur);
+    float chR = timeChannel (rTauR.cur);
+    if (posEqActive)
+    {
+        chL = posEqL.process (chL);
+        chR = posEqR.process (chR);
+    }
     float L = rGL.cur * chL + rKs.cur * side;
     float R = rGR.cur * chR - rKs.cur * side;
 
@@ -685,6 +714,9 @@ void SpatialEngine::processSample (float xL, float xR, float& oL, float& oR) noe
     }
 
     // Room (source room: fed before distance attenuation, level set by the DRR model).
+    // Mono Depth / mono tracks: the direct mid (no pan, width or time differences) plus the room's
+    // dedicated mono output — a true mono render rather than a fold-down of the stereo image.
+    float monoSig = M;
     const float x1 = rRoomX.cur;
     for (int i = 0; i < 2; ++i)
     {
@@ -692,16 +724,28 @@ void SpatialEngine::processSample (float xL, float xR, float& oL, float& oR) noe
         auto& room = rooms[(size_t) i];
         if (wRoom <= 0.0f || room.type() == roomOff)
             continue;
-        float rl, rrOut;
-        room.process (roomIn, rl, rrOut);
+        float rl, rrOut, rm;
+        room.process (roomIn, rl, rrOut, rm);
         L += wRoom * rl;
         R += wRoom * rrOut;
+        monoSig += wRoom * rm;
     }
 
     if (numOutChannels == 1)
     {
-        L = (L + R) * rMonoOut.cur;
+        L = monoSig;
         R = L;
+    }
+    else if (rMonoDepth.cur > 0.0f)
+    {
+        const float mono = monoSig * rMonoGain.cur;
+        if (rMonoDepth.cur >= 1.0f)
+            L = R = mono; // exactly identical channels
+        else
+        {
+            L += rMonoDepth.cur * (mono - L);
+            R += rMonoDepth.cur * (mono - R);
+        }
     }
 
     // Occlusion: transmission through the partition (direct + source-room reverb).

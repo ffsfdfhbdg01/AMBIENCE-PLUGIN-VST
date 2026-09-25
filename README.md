@@ -38,6 +38,8 @@ Strona wydania zawiera instrukcję instalacji krok po kroku.
   - płynna automatyka,
   - deterministyczny render, niezależny od bufora,
   - stałe ID parametrów i wersjonowany stan.
+- **Mono Depth:** tryb dla mono dialogu z planu. Wyjście jest ściśle mono (L = R), a działają tylko wskazówki głębi: odległość, powietrze, pomieszczenie (prawdziwy pogłos mono zamiast składania stereo) i przeszkoda. Bez panoramy, szerokości i różnic czasu.
+- **Equalized Ambience** (domyślnie **włączone**): automatyczny EQ wyliczany z odległości i położenia — pochłanianie powietrza, usuwanie basu z efektu zbliżeniowego mikrofonu i delikatne przyciemnienie góry po stronie oddalonej od źródła. Po wyłączeniu zmienia się tylko poziom, czas i pomieszczenie, a barwa zostaje jak w nagraniu.
 - **ON/OFF:** przycisk zasilania w lewym górnym rogu (bypass bez trzasków — sygnał przechodzi bez zmian, interfejs przygasa).
 - **Sprawdzanie aktualizacji:** ikona koła zębatego → *Check for updates…* porównuje wersję z najnowszym wydaniem na GitHubie i proponuje przejście do strony pobierania.
 - **UI:** ciemne i minimalistyczne, ze skalowaniem 50–200 % i widokiem sceny z góry, po którym przeciąga się źródło. Dodatkowo: 20 presetów filmowych, presety użytkownika, porównanie A/B, cofnij/ponów (Undo/Redo).
@@ -150,6 +152,7 @@ Presety użytkownika są zapisywane jako pliki `.ambpreset` (XML):
 | **Input: Auto / Mono / Stereo** | *Auto* działa według układu ścieżki. *Mono* sumuje L+R do źródła punktowego (dialog, foley). *Stereo* zachowuje obraz stereo (atmosfery, muzyka): Pan przesuwa cały obraz, a przy Pan = 0 obraz zostaje nietknięty. |
 | **Render: Speakers / Headphones** | *Speakers* (domyślnie) to panorama poziomem + czasem dla odsłuchu głośnikowego. *Headphones* to model binauralny głowy — tylko do słuchawek, **niezgodny z mono**. |
 | **Mono-safe** (domyślnie ON) | Ogranicza różnicę czasu do 0,3 ms i tylko poniżej 1,2 kHz. Suma mono zmienia się wtedy o ≤ 3 dB w każdej tercji. |
+| **Mono Depth** (domyślnie OFF) | Dla mono dialogu z planu: wyjście mono (L = R, na ścieżce mono jeden kanał), tylko głębia. Odległość, powietrze, pomieszczenie (dedykowane wyjście mono pogłosu — bez filtrowania grzebieniowego ze składania stereo), przeszkoda i efekt zbliżeniowy działają. Pan, Width, Time Pan i tryb Headphones są nieaktywne. Na ścieżce mono (1→1) wtyczka zawsze pracuje w ten sposób. |
 | **Auto Gain** (domyślnie OFF) | Kompensuje ubytek głośności wynikający z odległości, przeszkody i pomieszczenia. Przydaje się, gdy poziom ustawiasz osobno suwakiem, a wtyczki używasz tylko do barwy i przestrzeni. |
 | **Advanced** | Panel parametrów szczegółowych (poniżej). |
 
@@ -157,6 +160,14 @@ Presety użytkownika są zapisywane jako pliki `.ambpreset` (XML):
 Przeciągnij pomarańczowy punkt, żeby ustawić źródło: kąt odpowiada **Pan**, promień to **Distance** w skali logarytmicznej z pierścieniami 1 m – 1 km. Przeciąganie zapisuje automatykę obu parametrów. Kółko myszy zmienia odległość, a dwuklik resetuje źródło (centrum, odległość nagrania). Na scenie widać też przeszkodę (kolor zależy od materiału, szczelina oznacza *Leak*), szerokość źródła (łuk) i zasięg pomieszczenia (linia przerywana).
 
 ### Karty
+
+Przełącznik **Equalized Ambience** (prawy górny róg karty *Position*, domyślnie **ON**) włącza i wyłącza cały automatyczny EQ zależny od odległości i położenia:
+
+- pochłanianie powietrza (ISO 9613-1; także przełącznik *Air Absorption* w Advanced),
+- kompensację efektu zbliżeniowego (*Mic Pattern*),
+- lekkie przyciemnienie wysokich częstotliwości (do −2,5 dB powyżej ok. 5 kHz) na kanale oddalonym od źródła w trybie Speakers.
+
+Po wyłączeniu barwa nagrania zostaje nietknięta. Przeszkody (Obstruction/Occlusion) i model głowy w trybie Headphones działają niezależnie od tego przełącznika.
 - **Position**
   - *Distance* 0,1–1000 m.
   - *Pan* L100–R100.
@@ -196,11 +207,12 @@ Przeciągnij pomarańczowy punkt, żeby ustawić źródło: kąt odpowiada **Pan
 Ergonomia: dwuklik przywraca wartość domyślną, Ctrl/Cmd + przeciąganie daje precyzyjną regulację, kółko myszy działa na pokrętłach, a kliknięcie wartości pozwala wpisać liczbę. Podpowiedzi pojawiają się po najechaniu na kontrolkę.
 
 ### Presety fabryczne
-Init (Neutral) · Dialogue – Close-Up / Medium Shot / Wide Shot · Across the Room · Off-Screen Left / Right · Across the Street · Far Away · Behind Closed Door · Door Ajar · Next Room (Drywall) · Neighbours (Brick Wall) · Through Concrete · Through Window · Behind Curtain · Around the Corner · Street from Inside a Car · Wide Ambience · Narrow Ambience.
+Init (Neutral) · Dialogue – Close-Up / Medium Shot / Wide Shot · Across the Room · Off-Screen Left / Right · Across the Street · Far Away · Behind Closed Door · Door Ajar · Next Room (Drywall) · Neighbours (Brick Wall) · Through Concrete · Through Window · Behind Curtain · Around the Corner · Street from Inside a Car · Wide Ambience · Narrow Ambience · Mono Dialogue – Medium Shot / Wide Shot / Next Room (z włączonym Mono Depth).
 
 Wszystkie mają wyłączony Auto Gain i Output 0 dB — poziom ustawiasz w miksie.
 
 ### Wskazówki do pracy przy filmie
+- **Mono dialog z planu:** włącz *Mono Depth* (lub użyj presetów *Mono Dialogue*). Ustaw *Recorded* na odległość mikrofonu, *Distance* na odległość w kadrze, wybierz pomieszczenie. Dialog oddala się bez rozlewania w stereo i bez problemów przy downmiksie.
 - **Dialog z boom/lav na plan ogólny:** ustaw *Recorded* na rzeczywistą odległość mikrofonu, *Distance* na odległość kamery, a *Room* na podobne wnętrze. Pogłos da wrażenie odległości; samo ściszenie go nie da.
 - **Zza ściany / drzwi:** wybierz *Occlusion* i materiał, a *Leak* ustaw według szczelności. Jeśli efekt ma być słyszalny, włącz Auto Gain albo podnieś poziom na suwaku — przegrody tłumią realnie 20–60 dB.
 - **Zgodność z mono:** zostaw *Mono-safe* włączone i obserwuj korelometr. Tryb *Headphones* służy do odsłuchu słuchawkowego i materiałów binauralnych, nie do miksu głośnikowego.

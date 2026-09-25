@@ -518,6 +518,103 @@ int main()
                "v1 -> v2 room index migration");
     } });
 
+    tests.push_back ({ "14c. Mono Depth: identical channels, depth cues kept, stereo-equivalent energy", [&]
+    {
+        const auto x = pinkNoise (48000 * 2, 21);
+        const auto x2 = pinkNoise (48000 * 2, 22);
+        for (int stereoIn = 0; stereoIn < 2; ++stereoIn)
+        {
+            EngineParams p;
+            p.monoDepth = true;
+            p.pan = -60;
+            p.width = 180;
+            p.timePan = 100;
+            p.monoSafe = false;
+            p.renderMode = 1;
+            p.distance = 7;
+            p.room = 8;
+            p.obstacle = 2;
+            p.material = 4;
+            std::vector<std::vector<float>> in = stereoIn ? std::vector<std::vector<float>> { x, x2 } : std::vector<std::vector<float>> { x };
+            const auto o = render (p, in, 2);
+            check (maxAbsDiff (o[0], o[1]) == 0.0, "L == R (stereo input " + std::to_string (stereoIn) + ")");
+        }
+        // Neutral settings: same level as a centred source (-3 dB pan law per channel).
+        {
+            EngineParams p;
+            p.monoDepth = true;
+            const auto o = render (p, { x }, 2);
+            std::vector<float> half (x.size());
+            for (size_t i = 0; i < x.size(); ++i)
+                half[i] = x[i] * 0.70710678f;
+            check (gainToDb (std::max (maxAbsDiff (o[0], half), maxAbsDiff (o[1], half))) <= -120.0, "neutral mono depth = centred source");
+        }
+        // Distance still attenuates and adds room: compare with the stereo render at centre.
+        {
+            EngineParams p;
+            p.distance = 8;
+            p.room = 7;
+            const auto st = render (p, { x }, 2);
+            p.monoDepth = true;
+            const auto md = render (p, { x }, 2);
+            auto power = [] (const std::vector<std::vector<float>>& o)
+            { return std::pow (rms (o[0].data() + 48000, 48000), 2) + std::pow (rms (o[1].data() + 48000, 48000), 2); };
+            near (10.0 * std::log10 (power (md) / power (st)), 0.0, 1.5, "mono depth energy vs stereo render (dB)");
+            EngineParams dry;
+            dry.monoDepth = true;
+            dry.distance = 8;
+            const auto d = render (dry, { x }, 2);
+            // 1 m -> 8 m without room: -18.1 dB direct level (+ -3 dB pan law per channel).
+            near (gainToDb (rms (d[0].data() + 48000, 48000) / rms (x.data() + 48000, 48000)), -18.06 - 3.01, 0.3, "mono depth distance attenuation");
+        }
+        // Mono track (1 -> 1) uses the same mono room output.
+        {
+            EngineParams p;
+            p.distance = 8;
+            p.room = 7;
+            const auto mono = render (p, { x }, 1);
+            p.monoDepth = true;
+            const auto md = render (p, { x }, 2);
+            double m = 0;
+            for (size_t i = 0; i < x.size(); ++i)
+                m = std::max (m, (double) std::abs (mono[0][i] * 0.70710678f - md[0][i]));
+            check (gainToDb (m) <= -100.0, "1->1 equals mono depth (scaled by the pan law)");
+        }
+    } });
+
+    tests.push_back ({ "14d. Equalized Ambience: on by default, off removes the automatic EQ", [&]
+    {
+        EngineParams def;
+        check (def.eqAmbience, "on by default");
+        // Distance 60 m, pan right: with EQ the high end is darker than without; level at 500 Hz ~equal.
+        auto band = [&] (bool eq, double f, int ch)
+        {
+            EngineParams p;
+            p.distance = 60;
+            p.pan = 60;
+            p.timePan = 0;
+            p.eqAmbience = eq;
+            const auto o = render (p, { sine (f, fs, 48000) }, 2);
+            return gainToDb (rms (o[(size_t) ch].data() + 9600, 38000));
+        };
+        const double hiOn = band (true, 8000, 0), hiOff = band (false, 8000, 0);
+        const double loOn = band (true, 500, 1), loOff = band (false, 500, 1);
+        check (hiOn < hiOff - 3.0, "EQ on: 8 kHz darker (" + std::to_string (hiOn - hiOff) + " dB)");
+        near (loOn - loOff, 0.0, 0.5, "EQ does not change level at 500 Hz");
+        // Off: no tonal change between 200 Hz and 8 kHz on the near channel at 60 m.
+        const double flat = band (false, 8000, 1) - band (false, 200, 1);
+        near (flat, 0.0, 0.3, "EQ off: flat response");
+        // Proximity compensation is part of the EQ.
+        EngineParams p;
+        p.recDistance = 0.3f;
+        p.distance = 3;
+        p.micPattern = 1;
+        const auto on = render (p, { sine (60, fs, 48000) }, 1);
+        p.eqAmbience = false;
+        const auto off = render (p, { sine (60, fs, 48000) }, 1);
+        check (rms (on[0].data() + 9600, 38000) < rms (off[0].data() + 9600, 38000) * 0.8, "proximity bass removed only with EQ on");
+    } });
+
     tests.push_back ({ "15. CPU benchmark (informative, processing only)", [&]
     {
         const int n = 48000 * 10, block = 512;

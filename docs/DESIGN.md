@@ -66,6 +66,12 @@ wejście (1 lub 2 kanały)
 - **Prawa panoramy:** 0 dB (balans), −3 dB (sin/cos), −4,5 dB (średnia geometryczna), −6 dB (liniowe). Dla źródeł stereo wzmocnienia są normalizowane tak, by w centrum wynosiły 1 (przezroczystość).
 - **Headphones:** model sferycznej głowy Browna i Dudy (1998): a = 8,75 cm, opóźnienia per ucho wg ich wzoru (3) (ITD Woodwortha), filtr cienia głowy 1-biegun/1-zero z α(θ) (α_min = 0,1, θ_min = 150°). Filtr jest znormalizowany do α(90°), więc źródło z przodu brzmi płasko. Opóźnienie fazowe filtra (przy 750 Hz) jest odejmowane, żeby całkowite ITD w paśmie < 1,5 kHz odpowiadało wzorowi Woodwortha (test: 0,656 ± 0,02 ms). Źródło stereo to dwa wirtualne źródła rozstawione o ±30°·Width. Poniżej 1 m płynnie włącza się paralaksa akustyczna (1/r osobno dla każdego ucha). Rysunek: `img/headphones.png`.
 
+### 3.2a Mono Depth
+Tryb ściśle monofoniczny. Sygnał wyjściowy to M ścieżki bezpośredniej (odległość, powietrze, efekt zbliżeniowy, obstruction) plus **dedykowane wyjście mono pomieszczenia**: wczesne odbicia z wagą √(g_L² + g_P²) (bez panoramy) oraz ogon FDN z wszystkich 8 linii (wzór znaków {+,+,+,+,−,−,−,−}·0,5). Energia tego wyjścia jest równa energii L+P wersji stereo (test: ±1,5 dB), więc przełączanie nie zmienia bilansu pogłosu. Składanie stereo pogłosu do mono dałoby tylko 4 linie i ubytki gęstości. Przy wyjściu stereo L = P = mono·g_c (g_c = prawo panoramy w centrum), co jest bitowo równe źródłu w centrum. Na ścieżce mono (1→1) używana jest ta sama ścieżka. Przełączanie crossfade'em 30 ms.
+
+### 3.2b Equalized Ambience
+Główny przełącznik automatycznego EQ zależnego od odległości i położenia (domyślnie ON). Obejmuje: pochłanianie powietrza, kompensację efektu zbliżeniowego oraz *position EQ* — półkę wysoką 5 kHz na kanale oddalonym od źródła (tryb Speakers), −2,5 dB·|pan| **[kalibracja]**, działającą tylko na M (Width pozostaje zgodne z mono). Po wyłączeniu odpowiedź częstotliwościowa jest płaska (test ±0,3 dB), a poziom w paśmie środkowym się nie zmienia (±0,5 dB).
+
 ### 3.3 Szerokość
 Dla źródeł stereo S jest mnożone przez Width. Źródła mono poszerza dekorelator (4 all-passy Schroedera, 3,1 / 4,7 / 6,3 / 11,3 ms, g = 0,6; zasada Kendalla 1995) — powstały sygnał S jest odejmowany w sumie mono. Głębokość przy 200 % wynosi 0,8 **[kalibracja]**. Bass Mono to filtr górnoprzepustowy LR4 (2 × SVF Butterwortha) na S.
 
@@ -122,6 +128,8 @@ Model deterministyczny: przewidywana zmiana głośności ważonej krzywą K (BS.
 | autoGain | Auto Gain | Off/On | **Off** | przełącznik |
 | autoGainRange | Auto Gain Range | 0–36 dB | 24 dB | lin. |
 | output | Output | −24…+24 dB | 0 | lin. |
+| monoDepth | Mono Depth | Off/On | Off | przełącznik |
+| eqAmbience | Equalized Ambience | Off/On | **On** | przełącznik |
 | bypass | Bypass | Off/On | Off | przełącznik (bypass hosta, crossfade 20 ms) |
 
 Przełączniki są zaimplementowane jako dwustanowe parametry wyboru. Ich znormalizowana wartość jest kwantowana, więc odtworzony stan jest dokładny (wymóg pluginval). Stan wtyczki ma atrybut `stateVersion` (obecnie 2) oraz przechowuje skalę UI i nazwę presetu.

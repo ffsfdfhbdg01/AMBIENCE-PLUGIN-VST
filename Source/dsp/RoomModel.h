@@ -97,7 +97,7 @@ public:
             l.reset();
         for (auto& s : damp)
             s = 0.0f;
-        erLpL = erLpR = 0.0f;
+        erLpL = erLpR = erLpM = 0.0f;
         snapGeometry();
     }
 
@@ -250,8 +250,16 @@ public:
 
     void process (float x, float& outL, float& outR) noexcept
     {
+        float m;
+        process (x, outL, outR, m);
+    }
+
+    // outM: dedicated mono output with the same total energy as L+R (all FDN lines, reflections
+    // unpanned) — used for Mono Depth and mono tracks instead of an L+R fold-down.
+    void process (float x, float& outL, float& outR, float& outM) noexcept
+    {
         input.push (x);
-        float eL = 0, eR = 0;
+        float eL = 0, eR = 0, eM = 0;
         const int nRefl = roomSpec (roomType).kind == RoomKind::openField ? 1 : numReflections;
         for (int i = 0; i < nRefl; ++i)
         {
@@ -262,13 +270,16 @@ public:
             const float v = input.read ((float) e.delay.cur);
             eL += (float) e.gainL.cur * v;
             eR += (float) e.gainR.cur * v;
+            eM += (float) std::sqrt (e.gainL.cur * e.gainL.cur + e.gainR.cur * e.gainR.cur) * v;
         }
         // Wall absorption lowers the high frequencies of reflections (listening calibration).
         constexpr float erLpCoeff = 0.45f;
         erLpL = flushDenormal (eL + erLpCoeff * (erLpL - eL));
         erLpR = flushDenormal (eR + erLpCoeff * (erLpR - eR));
+        erLpM = flushDenormal (eM + erLpCoeff * (erLpM - eM));
         outL = erLpL;
         outR = erLpR;
+        outM = erLpM;
 
         fdnGain.step();
         fdnInDelay.step();
@@ -288,15 +299,18 @@ public:
             static const float inSign[numLines] = { 1, -1, 1, -1, 1, -1, 1, -1 };
             static const float lSign[numLines] = { 1, 1, -1, -1, 1, 1, -1, -1 };
             static const float rSign[numLines] = { 1, -1, -1, 1, 1, -1, -1, 1 };
-            float tL = 0, tR = 0;
+            static const float mSign[numLines] = { 1, 1, 1, 1, -1, -1, -1, -1 };
+            float tL = 0, tR = 0, tM = 0;
             for (int i = 0; i < numLines; ++i)
             {
                 lines[(size_t) i].push (s[i] - hh + inSign[i] * in * 0.35355339f);
                 tL += lSign[i] * s[i];
                 tR += rSign[i] * s[i];
+                tM += mSign[i] * s[i];
             }
             outL += tL * 0.35355339f;
             outR += tR * 0.35355339f;
+            outM += tM * 0.5f;
         }
 
         if (roomType == roomOff)
@@ -404,7 +418,7 @@ private:
     std::array<double, numRoomTypes> refEnergy {};
     Ramp fdnGain, fdnInDelay;
     double wallReflection = 0.8, criticalDist = 1.0, tailNorm = 1.0;
-    float erLpL = 0, erLpR = 0;
+    float erLpL = 0, erLpR = 0, erLpM = 0;
     int silentCounter = 0;
 };
 

@@ -63,6 +63,8 @@ Ta wersja **nie ma jeszcze płatnego podpisu cyfrowego wydawcy** (Apple Develope
 
 - **Odległość:** poziom względem odległości nagrania, pochłanianie powietrza (ISO 9613-1), usuwanie efektu zbliżeniowego mikrofonu, opcjonalny Doppler.
 - **16 przestrzeni:** OPEN A/B/C (pole, ulica, podwórko), SMALL, MEDIUM, LARGE i HALL w wariantach **A** (neutralny), **B** (wytłumiony) i **C** (żywy, twarde powierzchnie) — z wczesnymi odbiciami i pogłosem zależnymi od pozycji źródła.
+- **Mono Depth** — oddalanie mono dialogu z planu w mono: wyjście L = R, tylko głębia (odległość, powietrze, prawdziwy pogłos mono, przeszkoda), plus 3 presety *Mono Dialogue*.
+- **Equalized Ambience** (domyślnie włączone) — automatyczny EQ z odległości i położenia; po wyłączeniu barwa zostaje jak w nagraniu.
 - **Przycisk ON/OFF** (bypass bez trzasków) i **sprawdzanie aktualizacji** w ustawieniach (ikona koła zębatego).
 - **Panorama:** *Speakers* (poziom + czas, tryb **Mono-safe**) lub *Headphones* (binauralny model głowy).
 - **Mono / Stereo:** przełącznik Auto / Mono / Stereo; szerokość 0–200 % zgodna z mono; Bass Mono.
