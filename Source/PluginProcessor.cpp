@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 
 #include "PluginEditor.h"
+#include "dsp/RoomModel.h"
 
 namespace
 {
@@ -246,8 +247,14 @@ void AmbienceProcessor::setStateInformation (const void* data, int sizeInBytes)
     const int version = state.getProperty ("stateVersion", 1);
     // Migration hook: states from future versions are loaded best-effort; parameters unknown
     // to this version are ignored by the APVTS, missing ones keep their defaults.
-    if (version < 1)
-        state.setProperty ("stateVersion", 1, nullptr);
+    if (version < 2)
+    {
+        // v1 had 6 rooms (Off, Outdoor, Small, Medium, Large, Hall); map to the A variants.
+        for (auto child : state)
+            if (child.hasType ("PARAM") && child.getProperty ("id").toString() == amb::pid::room)
+                child.setProperty ("value", amb::migrateRoomIndexV1 ((int) (float) child.getProperty ("value")), nullptr);
+        state.setProperty ("stateVersion", stateVersion, nullptr);
+    }
     uiScalePercent = juce::jlimit (50, 200, (int) state.getProperty ("uiScale", 100));
     presets.setCurrentName (state.getProperty ("presetName", "Init (Neutral)").toString());
     apvts.replaceState (state);

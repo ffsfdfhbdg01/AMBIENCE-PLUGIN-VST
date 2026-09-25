@@ -1,4 +1,4 @@
-﻿; Inno Setup 6 script for the Ambience plugin (Windows x64).
+﻿; Inno Setup 6 script for SAMS AMBIENCE CONTROL (Windows x64).
 ; Build:  iscc /DAppVersion=1.0.0 /DBuildDir=..\..\build\Ambience_artefacts\Release installer\windows\Ambience.iss
 ;
 ; - VST3 goes to the standard folder: C:\Program Files\Common Files\VST3 (all users) or
@@ -16,8 +16,9 @@
   #define OutputDir "..\..\dist"
 #endif
 
-#define AppName "Ambience"
-#define Publisher "Ambience Audio"
+#define AppName "SAMS AMBIENCE CONTROL"
+#define FileBase "SAMS-Ambience-Control"
+#define Publisher "SAMS"
 
 [Setup]
 AppId={{746B5355-6551-467E-A00E-96B12B11C003}
@@ -42,7 +43,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir={#OutputDir}
-OutputBaseFilename={#AppName}-{#AppVersion}-Windows-Setup
+OutputBaseFilename={#FileBase}-{#AppVersion}-Windows-Setup
 Compression=lzma2/ultra
 SolidCompression=yes
 WizardStyle=modern
@@ -74,11 +75,18 @@ Name: "vst3"; Description: "{cm:CompVst3}"; Types: full custom; Flags: fixed
 Name: "standalone"; Description: "{cm:CompStandalone}"; Types: full
 
 [Files]
-Source: "{#BuildDir}\VST3\Ambience.vst3\*"; DestDir: "{app}\Ambience.vst3"; Components: vst3; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#BuildDir}\Standalone\Ambience.exe"; DestDir: "{autopf}\{#Publisher}\{#AppName}"; Components: standalone; Flags: ignoreversion
+Source: "{#BuildDir}\VST3\{#AppName}.vst3\*"; DestDir: "{app}\{#AppName}.vst3"; Components: vst3; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#BuildDir}\Standalone\{#AppName}.exe"; DestDir: "{autopf}\{#Publisher}\{#AppName}"; Components: standalone; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{autopf}\{#Publisher}\{#AppName}\Ambience.exe"; Components: standalone
+Name: "{autoprograms}\{#AppName}"; Filename: "{autopf}\{#Publisher}\{#AppName}\{#AppName}.exe"; Components: standalone
+
+; Version 1.0.0 was published as "Ambience": remove it so hosts do not list the plug-in twice.
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\Ambience.vst3"
+Type: filesandordirs; Name: "{autopf}\Ambience Audio\Ambience"
+Type: dirifempty; Name: "{autopf}\Ambience Audio"
+Type: files; Name: "{autoprograms}\Ambience.lnk"
 
 [UninstallDelete]
 Type: dirifempty; Name: "{autopf}\{#Publisher}\{#AppName}"

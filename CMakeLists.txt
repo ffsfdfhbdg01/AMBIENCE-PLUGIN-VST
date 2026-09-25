@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(Ambience VERSION 1.0.0 LANGUAGES C CXX)
+project(Ambience VERSION 1.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -43,25 +43,34 @@ if(AMBIENCE_BUILD_PLUGIN)
     FetchContent_MakeAvailable(JUCE)
 
     # Company / plugin codes: 4 chars. AU/GarageBand: first letter upper case, the rest lower case.
-    set(AMBIENCE_COMPANY_NAME "Ambience Audio" CACHE STRING "Company name shown in hosts")
+    set(AMBIENCE_COMPANY_NAME "SAMS" CACHE STRING "Company name shown in hosts")
     set(AMBIENCE_MANUFACTURER_CODE "Ambi" CACHE STRING "4-char manufacturer code (placeholder, change before release)")
 
-    # Release builds pass -DAMBIENCE_VERSION=<tag version>.
-    set(AMBIENCE_VERSION "${PROJECT_VERSION}" CACHE STRING "Plugin version shown to hosts")
+    # GitHub repository queried by "Check for updates" (must be public for anonymous access).
+    set(AMBIENCE_GITHUB_REPO "ffsfdfhbdg01/AMBIENCE-PLUGIN-VST" CACHE STRING "owner/repo for update checks")
+
+    # Release builds may pass -DAMBIENCE_VERSION=<tag version>; empty = project() version.
+    set(AMBIENCE_VERSION "" CACHE STRING "Override of the plugin version shown to hosts")
+    if(AMBIENCE_VERSION STREQUAL "")
+        set(AMBIENCE_PLUGIN_VERSION "${PROJECT_VERSION}")
+    else()
+        set(AMBIENCE_PLUGIN_VERSION "${AMBIENCE_VERSION}")
+    endif()
 
     juce_add_plugin(Ambience
-        VERSION ${AMBIENCE_VERSION}
+        VERSION ${AMBIENCE_PLUGIN_VERSION}
         COMPANY_NAME "${AMBIENCE_COMPANY_NAME}"
         PLUGIN_MANUFACTURER_CODE ${AMBIENCE_MANUFACTURER_CODE}
         PLUGIN_CODE Ambc
         FORMATS VST3 AU Standalone
-        PRODUCT_NAME "Ambience"
+        PRODUCT_NAME "SAMS AMBIENCE CONTROL"
         BUNDLE_ID "com.ambienceaudio.ambience"
         IS_SYNTH FALSE
         NEEDS_MIDI_INPUT FALSE
         NEEDS_MIDI_OUTPUT FALSE
         IS_MIDI_EFFECT FALSE
         EDITOR_WANTS_KEYBOARD_FOCUS TRUE
+        NEEDS_CURL TRUE
         COPY_PLUGIN_AFTER_BUILD FALSE
         VST3_CATEGORIES Fx Spatial
         AU_MAIN_TYPE kAudioUnitType_Effect)
@@ -74,13 +83,14 @@ if(AMBIENCE_BUILD_PLUGIN)
         Source/PluginProcessor.cpp
         Source/PluginEditor.cpp
         Source/PresetManager.cpp
+        Source/UpdateChecker.cpp
         Source/ui/LookAndFeel.cpp
         Source/ui/StageView.cpp
         Source/ui/Meters.cpp)
 
     target_compile_definitions(Ambience PUBLIC
         JUCE_WEB_BROWSER=0
-        JUCE_USE_CURL=0
+        AMBIENCE_GITHUB_REPO="${AMBIENCE_GITHUB_REPO}"
         JUCE_VST3_CAN_REPLACE_VST2=0
         JUCE_DISPLAY_SPLASH_SCREEN=0)
 

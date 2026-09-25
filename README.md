@@ -1,6 +1,6 @@
-# Ambience — odległość, kierunek i przeszkody dla miksu filmowego
+# SAMS AMBIENCE CONTROL — odległość, kierunek i przeszkody dla miksu filmowego
 
-**Ambience** to wtyczka VST3 (oraz AU i Standalone) do umieszczania dźwięku w przestrzeni na podstawie psychoakustyki i akustyki fizycznej. Pozwala:
+**SAMS AMBIENCE CONTROL** to wtyczka VST3 (oraz AU i Standalone) do umieszczania dźwięku w przestrzeni na podstawie psychoakustyki i akustyki fizycznej. Pozwala:
 
 - oddalać lub przybliżać źródło,
 - panoramować je lewo–prawo z różnicami **czasu i fazy**, a nie tylko głośności,
@@ -15,8 +15,8 @@ Przeznaczenie: postprodukcja dźwięku w filmie — dopasowanie perspektywy dial
 
 Gotowe instalatory są w zakładce **[Releases](../../releases/latest)**:
 
-- **Windows:** `Ambience-x.y.z-Windows-Setup.exe`
-- **macOS:** `Ambience-x.y.z-macOS.pkg`
+- **Windows:** `SAMS-Ambience-Control-x.y.z-Windows-Setup.exe`
+- **macOS:** `SAMS-Ambience-Control-x.y.z-macOS.pkg`
 
 Strona wydania zawiera instrukcję instalacji krok po kroku.
 
@@ -38,6 +38,8 @@ Strona wydania zawiera instrukcję instalacji krok po kroku.
   - płynna automatyka,
   - deterministyczny render, niezależny od bufora,
   - stałe ID parametrów i wersjonowany stan.
+- **ON/OFF:** przycisk zasilania w lewym górnym rogu (bypass bez trzasków — sygnał przechodzi bez zmian, interfejs przygasa).
+- **Sprawdzanie aktualizacji:** ikona koła zębatego → *Check for updates…* porównuje wersję z najnowszym wydaniem na GitHubie i proponuje przejście do strony pobierania.
 - **UI:** ciemne i minimalistyczne, ze skalowaniem 50–200 % i widokiem sceny z góry, po którym przeciąga się źródło. Dodatkowo: 20 presetów filmowych, presety użytkownika, porównanie A/B, cofnij/ponów (Undo/Redo).
 
 ## Budowanie
@@ -53,7 +55,7 @@ cmake --build build --config Release --target Ambience_VST3
 
 Linux (Ubuntu) — potrzebne pakiety: `libasound2-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxext-dev libxcomposite-dev libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`.
 
-Wynik trafia do `build/Ambience_artefacts/Release/VST3/Ambience.vst3`. Skopiuj go do katalogu wtyczek:
+Wynik trafia do `build/Ambience_artefacts/Release/VST3/SAMS AMBIENCE CONTROL.vst3`. Skopiuj go do katalogu wtyczek:
 
 - Windows: `C:\Program Files\Common Files\VST3`
 - macOS: `~/Library/Audio/Plug-Ins/VST3` (AU: `~/Library/Audio/Plug-Ins/Components`)
@@ -82,13 +84,13 @@ Instalatory buduje GitHub Actions (`.github/workflows/release.yml`):
 - **tag `v1.2.3`** — buduje instalatory i publikuje je w zakładce *Releases*;
 - **przycisk „Run workflow”** (Actions → Installers) albo zmiana w `installer/` — instalatory trafiają do artefaktów przebiegu.
 
-| | Windows (`Ambience-x.y.z-Windows-Setup.exe`) | macOS (`Ambience-x.y.z-macOS.pkg`) |
+| | Windows (`SAMS-Ambience-Control-x.y.z-Windows-Setup.exe`) | macOS (`SAMS-Ambience-Control-x.y.z-macOS.pkg`) |
 |---|---|---|
 | Domyślna lokalizacja | `C:\Program Files\Common Files\VST3` | `/Library/Audio/Plug-Ins/VST3` i `/Library/Audio/Plug-Ins/Components` |
 | Tylko dla bieżącego użytkownika | `%LOCALAPPDATA%\Programs\Common\VST3` (wybór na starcie instalatora) | `~/Library/Audio/Plug-Ins/…` (krok *Wybór miejsca docelowego* → „Zainstaluj tylko dla mnie”) |
 | Zmiana lokalizacji | dowolny folder na stronie *Wybierz docelową lokalizację* | wybór dysku oraz „dla wszystkich / tylko dla mnie” (standardowe katalogi wtyczek, w których szukają hosty) |
 | Komponenty | VST3 (zawsze) + opcjonalnie Standalone | VST3, AU, Standalone (przycisk *Dostosuj*) |
-| Deinstalacja | Panel sterowania / Ustawienia → Aplikacje | usunięcie plików `Ambience.vst3` / `Ambience.component` |
+| Deinstalacja | Panel sterowania / Ustawienia → Aplikacje | usunięcie plików `SAMS AMBIENCE CONTROL.vst3` / `.component` |
 
 Instalator Windows ma wersję polską i angielską. Na macOS dowolny folder nie jest możliwy, bo instalator `.pkg` nie pozwala wybrać folderu dla poszczególnych komponentów. Hosty i tak szukają wtyczek wyłącznie w standardowych katalogach.
 
@@ -120,7 +122,14 @@ Workflow podpisuje DLL wtyczki, aplikację Standalone i sam instalator, ze znacz
 ## Instrukcja obsługi
 
 ### Pasek górny
-Pasek zawiera:
+
+- **Przycisk zasilania (⏻, lewy górny róg)** — włącza i wyłącza wtyczkę. W stanie OFF sygnał przechodzi bez zmian (przełączanie z płynnym przejściem 20 ms, zgodne z bypassem hosta, więc da się je automatyzować).
+- **Koło zębate (prawy górny róg)** — ustawienia:
+  - *Check for updates…* — sprawdza najnowszą wersję na GitHubie. Jeśli jest nowsza, pyta, czy zaktualizować; *Yes, update* otwiera stronę pobierania z instalatorem. Wymaga połączenia z internetem i **publicznego** repozytorium (dla prywatnego GitHub zwraca błąd i wtyczka to zgłasza).
+  - *Open download page* — otwiera stronę najnowszego wydania.
+  - *Show preset folder* — folder presetów użytkownika.
+
+Pozostała część paska zawiera:
 
 - wybór presetu ze strzałkami poprzedni/następny,
 - **Save** — zapis presetu użytkownika,
@@ -152,7 +161,12 @@ Przeciągnij pomarańczowy punkt, żeby ustawić źródło: kąt odpowiada **Pan
   - *Distance* 0,1–1000 m.
   - *Pan* L100–R100.
   - *Width* 0–200 %: 0 = mono, 100 = bez zmian, 200 = szeroko.
-- **Room** — pomieszczenie źródła: *Off* (tylko wskazówki bezpośrednie — gdy używasz własnych pogłosów na szynach), *Outdoor*, *Small*, *Medium*, *Large*, *Hall*. *Level* koryguje pogłos względem fizycznego DRR. To pogłos jest najsilniejszą wskazówką odległości: bez niego oddalenie brzmi głównie jak ściszenie.
+- **Room** — przestrzeń źródła, 16 opcji (lista pogrupowana wielkością):
+  - *Off* — tylko wskazówki bezpośrednie (gdy używasz własnych pogłosów na szynach);
+  - *OPEN A / B / C* — otwarte pole (tylko odbicie od gruntu), ulica (dwie fasady, bez sufitu), podwórko;
+  - *SMALL*, *MEDIUM*, *LARGE*, *HALL* — każda w wariantach **A** (neutralny), **B** (wytłumiony, np. umeblowany pokój, studio, teatr) i **C** (żywy: łazienka z kafelkami, pusta sala, magazyn, kościół).
+
+  *Level* koryguje pogłos względem fizycznego DRR. To pogłos jest najsilniejszą wskazówką odległości: bez niego oddalenie brzmi głównie jak ściszenie.
 - **Obstacle**
   - *Obstruction* — przeszkoda w tym samym pomieszczeniu (filar, samochód, róg budynku). Dźwięk ją obchodzi, a pogłos zostaje. *Size* to długość objazdu.
   - *Occlusion* — przegroda między pomieszczeniami. Słychać dźwięk i pogłos pomieszczenia źródła przefiltrowane przez materiał.
@@ -193,7 +207,7 @@ Wszystkie mają wyłączony Auto Gain i Output 0 dB — poziom ustawiasz w miksi
 - **Synchronizacja:** *Propagation Delay* włączaj tylko świadomie (przejazdy, odległe wybuchy — dźwięk „po” obrazie).
 
 ### Scenariusze odsłuchowe (do oceny w reżyserce)
-1. Dialog nagrany z 0,5 m przesunięty na 8 m w *Medium Room* ma brzmieć jak plan ogólny w tym samym wnętrzu, a nie jak „ściszony i zmatowiony”.
+1. Dialog nagrany z 0,5 m przesunięty na 8 m w *Medium A* ma brzmieć jak plan ogólny w tym samym wnętrzu, a nie jak „ściszony i zmatowiony”.
 2. Muzyka zza ściany z cegły: słychać głównie bas i stopę, bez sybilantów i blach.
 3. Automatyka *Amount* 100 → 0 % (otwierają się drzwi) jest płynna i bez trzasków.
 4. Przejazd samochodu (automatyka Distance + Pan, *Propagation Delay* ON) daje naturalny efekt Dopplera.
@@ -205,4 +219,4 @@ Wszystkie mają wyłączony Auto Gain i Output 0 dB — poziom ustawiasz w miksi
 - **VST** jest znakiem towarowym Steinberg Media Technologies GmbH.
 - Font **Inter** (Rasmus Andersson) jest dostępny na licencji SIL Open Font License 1.1 — `Resources/Inter-LICENSE.txt`.
 
-Przed publikacją zmień nazwę firmy i 4-znakowy kod producenta (`AMBIENCE_MANUFACTURER_CODE` w CMake). Rozważ też inną nazwę produktu: istnieje znana darmowa wtyczka pogłosowa „Ambience” (Smartelectronix).
+Wersja 1.0.0 nosiła nazwę roboczą „Ambience”. Od 1.1.0 wtyczka nazywa się **SAMS AMBIENCE CONTROL**, ale wewnętrzne identyfikatory się nie zmieniły, więc zapisane projekty otwierają się bez zmian. Instalator usuwa starą wtyczkę `Ambience`. Presety użytkownika zostają w dotychczasowych folderach `Ambience`.

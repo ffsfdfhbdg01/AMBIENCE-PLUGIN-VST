@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
-    <title>Ambience @VERSION@</title>
+    <title>SAMS AMBIENCE CONTROL @VERSION@</title>
     <organization>com.ambienceaudio</organization>
     <welcome file="welcome.html" mime-type="text/html"/>
     <conclusion file="conclusion.html" mime-type="text/html"/>
@@ -17,17 +17,17 @@
     </choices-outline>
 
     <choice id="vst3" title="VST3 plug-in"
-            description="Ambience.vst3 → Library/Audio/Plug-Ins/VST3 (Nuendo, Cubase, Reaper, Resolve, Premiere, Studio One…)."
+            description="SAMS AMBIENCE CONTROL.vst3 → Library/Audio/Plug-Ins/VST3 (Nuendo, Cubase, Reaper, Resolve, Premiere, Studio One…)."
             selected="true" enabled="true">
         <pkg-ref id="com.ambienceaudio.ambience.vst3"/>
     </choice>
     <choice id="au" title="Audio Unit (AU)"
-            description="Ambience.component → Library/Audio/Plug-Ins/Components (Logic Pro, Final Cut Pro, GarageBand…)."
+            description="SAMS AMBIENCE CONTROL.component → Library/Audio/Plug-Ins/Components (Logic Pro, Final Cut Pro, GarageBand…)."
             selected="true" enabled="true">
         <pkg-ref id="com.ambienceaudio.ambience.au"/>
     </choice>
     <choice id="standalone" title="Standalone application"
-            description="Ambience.app → Applications."
+            description="SAMS AMBIENCE CONTROL.app → Applications."
             selected="false" enabled="true">
         <pkg-ref id="com.ambienceaudio.ambience.standalone"/>
     </choice>

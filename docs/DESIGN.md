@@ -1,6 +1,6 @@
-# Ambience — projekt DSP (DESIGN)
+# SAMS AMBIENCE CONTROL — projekt DSP (DESIGN)
 
-Dokument opisuje tor sygnału, zastosowane modele, parametry, założenia i wyniki weryfikacji wtyczki **Ambience** (specyfikacja: [`PROMPT.md`](../PROMPT.md)). Wartości oznaczone **[kalibracja]** nie pochodzą bezpośrednio z literatury — dobrano je odsłuchowo/inżyniersko w zakresie podawanym przez źródła i należy je weryfikować odsłuchem.
+Dokument opisuje tor sygnału, zastosowane modele, parametry, założenia i wyniki weryfikacji wtyczki **SAMS AMBIENCE CONTROL** (do wersji 1.0.0 pod nazwą roboczą „Ambience”) (specyfikacja: [`PROMPT.md`](../PROMPT.md)). Wartości oznaczone **[kalibracja]** nie pochodzą bezpośrednio z literatury — dobrano je odsłuchowo/inżyniersko w zakresie podawanym przez źródła i należy je weryfikować odsłuchem.
 
 ## 1. Architektura
 
@@ -44,7 +44,19 @@ wejście (1 lub 2 kanały)
 - **Pochłanianie w powietrzu** wg ISO 9613-1 (wzory 3–5, zał. B). Tłumienie α(f)·max(0, r − r_rec) realizuje kaskada 5 półek wysokich + wzmocnienie szerokopasmowe. Wzmocnienia dopasowuje deterministyczny solwer Levenberga–Marquardta na siatce tercjowej 25 Hz–16 kHz, a częstotliwości półek są rozmieszczane względem punktu, w którym tłumienie osiąga 24 dB. Błąd wynosi ≤ 1 dB wszędzie tam, gdzie tłumienie < 24 dB (test dla 10–1000 m, 44,1–192 kHz). Rysunek: `img/air_absorption.png`.
 - **DRR i pogłos:** poziom pola rozproszonego jest ustawiony tak, by zrównał się z dźwiękiem bezpośrednim w odległości krytycznej r_c ≈ 0,057·√(Q·V/T60) (Kuttruff; Q = 2). Energia ogona FDN jest normalizowana na podstawie odpowiedzi impulsowej zmierzonej w `prepare()`.
 - **Wczesne odbicia:** metoda źródeł pozornych 1. rzędu (Allen i Berkley 1979) w prostopadłościanie. Każde odbicie ma własną drogę, poziom (wsp. odbicia √(1−ᾱ) z Sabine'a), kierunek i opóźnienie względem dźwięku bezpośredniego — stąd ITDG maleje wraz z odległością. Gdy źródło wychodzi poza pomieszczenie, jego pozycja jest przycinana do ścian (margines 0,3 m). W trybie Outdoor jest tylko odbicie od gruntu (wysokości 1,6 m, współczynnik 0,55 **[kalibracja]**).
-- **Pomieszczenia [kalibracja]:** Small 4×3×2,5 m, T60 0,4 s; Medium 7×6,5×3,3 m, 0,6 s; Large 12×12×4,2 m, 0,9 s; Hall 25×20×10 m, 1,8 s. Stosunek T60 dla wysokich częstotliwości wynosi 0,45–0,55.
+- **Przestrzenie [kalibracja]** (16; A = neutralny, B = wytłumiony, C = żywy):
+
+  | Typ | Wymiary [m] | T60 [s] | T60 HF/mid | Uwagi |
+  |---|---|---|---|---|
+  | Open A (field) | — | — | — | tylko odbicie od gruntu |
+  | Open B (street) | 14 × 60, bez sufitu | 1,1 | 0,4 | fasady + grunt, ogon ×0,3 |
+  | Open C (courtyard) | 20 × 24, bez sufitu | 0,9 | 0,5 | ściany + grunt, ogon ×0,4 |
+  | Small A / B / C | 4×3×2,5 / 3,5×3×2,4 / 3×2,5×2,4 | 0,4 / 0,25 / 0,9 | 0,55 / 0,45 / 0,8 | C = łazienka z kafelkami |
+  | Medium A / B / C | 7×6,5×3,3 / 6×5×2,7 / 9×7×3,2 | 0,6 / 0,45 / 1,0 | 0,5 / 0,45 / 0,7 | B = umeblowany, C = pusta sala |
+  | Large A / B / C | 12×12×4,2 / 15×12×6 / 30×20×8 | 0,9 / 0,7 / 2,2 | 0,5 / 0,45 / 0,6 | B = studio, C = magazyn |
+  | Hall A / B / C | 25×20×10 / 30×22×12 / 50×20×20 | 1,8 / 1,3 / 4,0 | 0,45 / 0,5 / 0,55 | B = teatr, C = kościół |
+
+  Stan w wersji 1 miał 6 przestrzeni (Off, Outdoor, Small, Medium, Large, Hall). Przy wczytywaniu projektu lub presetu z v1 indeks jest mapowany na warianty A (`migrateRoomIndexV1`, `stateVersion` = 2).
 - **FDN:** 8 linii, macierz Householdera, jednobiegunowe tłumienie w pętli (Jot i Chaigne 1991), dekorelowane wyjścia L/P, brak modulacji (determinizm).
 - **Efekt zbliżeniowy:** stosunek odpowiedzi mikrofonu gradientowego 1. rzędu w nowej i nagranej odległości, H(s) = (s + B·c/r)/(s + B·c/r_rec), gdzie B to udział składowej gradientowej (omni 0, kardioida 0,5, ósemka 1). Jest to półka ograniczona — przy oddalaniu usuwa podbicie basu z bliskiego nagrania.
 - **Opóźnienie propagacji / Doppler:** linia opóźniająca z interpolacją Lagrange'a 3. rzędu, maks. 1000 m / c ≈ 2,9 s. Nie jest zgłaszane hostowi jako latencja (to efekt, nie kompensacja).
@@ -96,7 +108,7 @@ Model deterministyczny: przewidywana zmiana głośności ważonej krzywą K (BS.
 | humidity | Humidity | 10–100 % | 50 | lin. |
 | micPattern | Mic Pattern | Omni / Cardioid / Figure-8 | Omni | wybór |
 | propDelay | Propagation Delay | Off/On | Off | przełącznik |
-| room | Room | Off / Outdoor / Small / Medium / Large / Hall | Off | wybór |
+| room | Room | Off, Open A–C, Small A–C, Medium A–C, Large A–C, Hall A–C (16) | Off | wybór |
 | roomLevel | Room Level | −24…+12 dB | 0 | lin. |
 | decay | Decay | 50–200 % | 100 % | lin. |
 | width | Width | 0–200 % | 100 % | lin. |
@@ -112,7 +124,7 @@ Model deterministyczny: przewidywana zmiana głośności ważonej krzywą K (BS.
 | output | Output | −24…+24 dB | 0 | lin. |
 | bypass | Bypass | Off/On | Off | przełącznik (bypass hosta, crossfade 20 ms) |
 
-Przełączniki są zaimplementowane jako dwustanowe parametry wyboru. Ich znormalizowana wartość jest kwantowana, więc odtworzony stan jest dokładny (wymóg pluginval). Stan wtyczki ma atrybut `stateVersion` (obecnie 1) oraz przechowuje skalę UI i nazwę presetu.
+Przełączniki są zaimplementowane jako dwustanowe parametry wyboru. Ich znormalizowana wartość jest kwantowana, więc odtworzony stan jest dokładny (wymóg pluginval). Stan wtyczki ma atrybut `stateVersion` (obecnie 2) oraz przechowuje skalę UI i nazwę presetu.
 
 ## 5. Weryfikacja (stan na ostatni commit)
 
@@ -133,9 +145,9 @@ Przełączniki są zaimplementowane jako dwustanowe parametry wyboru. Ich znorma
 | 13. Neutralność, latencja 0 | ✅ (null ≤ −120 dBFS) |
 | pluginval, strictness 10 | ✅ |
 | Walidator VST3 Steinberga | ✅ 47/47 |
-| CPU (48 kHz, stereo, maszyna CI Linux x64) | ok. 0,9–1,3 % rdzenia (Room Off), 1,7–2,1 % (Room Medium) |
+| CPU (48 kHz, stereo, maszyna wirtualna Linux x64, samo przetwarzanie) | ok. 0,5 % rdzenia (Room Off), ok. 1,5 % (Medium A) |
 
-Wynik CPU dla Room Off mieści się na granicy celu 1 %. Pomiar pochodzi z maszyny wirtualnej w chmurze i jest informacyjny — należy go powtórzyć na docelowym sprzęcie (`ambience_tests`, test 15).
+Oba wyniki mieszczą się w celach (≤ 1 % i ≤ 3 %). Pomiar pochodzi z maszyny wirtualnej w chmurze i jest informacyjny — należy go powtórzyć na docelowym sprzęcie (`ambience_tests`, test 15).
 
 ## 6. Ograniczenia i znane odstępstwa
 - Interpolacja Lagrange'a 3. rzędu tłumi najwyższe częstotliwości przy opóźnieniach ułamkowych (przy 48 kHz spadek rośnie powyżej ok. 14 kHz: kilka dB przy 18 kHz, więcej bliżej Nyquista). Dotyczy to ucha dalszego w trybie Headphones, Time Pan przy wyłączonym Mono-safe i Dopplera. Przy fs ≥ 88,2 kHz efekt jest poza pasmem.

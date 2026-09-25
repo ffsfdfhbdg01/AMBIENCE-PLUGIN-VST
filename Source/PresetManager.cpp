@@ -1,5 +1,7 @@
 #include "PresetManager.h"
 
+#include "dsp/RoomModel.h"
+
 PresetManager::PresetManager (juce::AudioProcessorValueTreeState& state) : apvts (state) {}
 
 juce::File PresetManager::userPresetFolder()
@@ -65,8 +67,15 @@ bool PresetManager::loadUser (const juce::String& name)
     if (auto* um = apvts.undoManager)
         um->beginNewTransaction ("Load preset");
     resetToDefaults();
+    const int version = xml->getIntAttribute ("version", 1);
     for (auto* e : xml->getChildWithTagNameIterator ("PARAM"))
-        setParam (e->getStringAttribute ("id"), (float) e->getDoubleAttribute ("value"));
+    {
+        const auto id = e->getStringAttribute ("id");
+        auto value = (float) e->getDoubleAttribute ("value");
+        if (version < 2 && id == amb::pid::room)
+            value = (float) amb::migrateRoomIndexV1 ((int) value);
+        setParam (id, value);
+    }
     current = name;
     return true;
 }

@@ -3,35 +3,73 @@
 // frequency-dependent decay. Deterministic: fixed delays, no random modulation.
 #pragma once
 
+#include <map>
+#include <mutex>
+
 #include "AcousticModels.h"
 
 namespace amb
 {
+enum class RoomKind
+{
+    off,
+    openField, // ground reflection only
+    openWalls, // walls + ground, no ceiling (street, courtyard): sparse, weak tail
+    room       // closed shoebox
+};
+
 struct RoomSpec
 {
     const char* name;
-    double width, length, height; // m
+    RoomKind kind;
+    double width, length, height; // m (open spaces: notional height for the tail model)
     double t60;                   // s, mid frequencies
     double hfRatio;               // T60(high) / T60(mid)
+    double tailScale;             // diffuse level scale (open spaces lose energy upwards)
 };
 
-// Orientative values (listening calibration): volumes ~30 / 150 / 600 / 5000 m^3.
+// Variant convention: A = neutral, B = damped / furnished, C = live / hard surfaces.
+// All values are orientative (listening calibration), see docs/DESIGN.md.
 inline const RoomSpec& roomSpec (int type) noexcept
 {
+    using K = RoomKind;
     static const RoomSpec specs[] = {
-        { "Off", 0, 0, 0, 0, 1 },
-        { "Outdoor", 0, 0, 0, 0, 1 },
-        { "Small Room", 4.0, 3.0, 2.5, 0.4, 0.55 },
-        { "Medium Room", 7.0, 6.5, 3.3, 0.6, 0.5 },
-        { "Large Room", 12.0, 12.0, 4.2, 0.9, 0.5 },
-        { "Hall", 25.0, 20.0, 10.0, 1.8, 0.45 },
+        { "Off", K::off, 0, 0, 0, 0, 1, 0 },
+        { "Open A (field)", K::openField, 0, 0, 0, 0, 1, 0 },
+        { "Open B (street)", K::openWalls, 14.0, 60.0, 12.0, 1.1, 0.4, 0.3 },
+        { "Open C (courtyard)", K::openWalls, 20.0, 24.0, 12.0, 0.9, 0.5, 0.4 },
+        { "Small A", K::room, 4.0, 3.0, 2.5, 0.4, 0.55, 1 },
+        { "Small B (dry)", K::room, 3.5, 3.0, 2.4, 0.25, 0.45, 1 },
+        { "Small C (tiled)", K::room, 3.0, 2.5, 2.4, 0.9, 0.8, 1 },
+        { "Medium A", K::room, 7.0, 6.5, 3.3, 0.6, 0.5, 1 },
+        { "Medium B (furnished)", K::room, 6.0, 5.0, 2.7, 0.45, 0.45, 1 },
+        { "Medium C (empty)", K::room, 9.0, 7.0, 3.2, 1.0, 0.7, 1 },
+        { "Large A", K::room, 12.0, 12.0, 4.2, 0.9, 0.5, 1 },
+        { "Large B (studio)", K::room, 15.0, 12.0, 6.0, 0.7, 0.45, 1 },
+        { "Large C (warehouse)", K::room, 30.0, 20.0, 8.0, 2.2, 0.6, 1 },
+        { "Hall A", K::room, 25.0, 20.0, 10.0, 1.8, 0.45, 1 },
+        { "Hall B (theatre)", K::room, 30.0, 22.0, 12.0, 1.3, 0.5, 1 },
+        { "Hall C (church)", K::room, 50.0, 20.0, 20.0, 4.0, 0.55, 1 },
     };
-    return specs[std::clamp (type, 0, 5)];
+    constexpr int n = (int) (sizeof (specs) / sizeof (specs[0]));
+    return specs[std::clamp (type, 0, n - 1)];
 }
 
 constexpr int roomOff = 0;
-constexpr int roomOutdoor = 1;
-constexpr int numRoomTypes = 6;
+constexpr int numRoomTypes = 16;
+
+inline bool roomHasTail (int type) noexcept
+{
+    const auto k = roomSpec (type).kind;
+    return k == RoomKind::room || k == RoomKind::openWalls;
+}
+
+// Room parameter index in state version 1 (Off, Outdoor, Small, Medium, Large, Hall) -> current.
+inline int migrateRoomIndexV1 (int oldIndex) noexcept
+{
+    static const int map[] = { 0, 1, 4, 7, 10, 13 };
+    return map[std::clamp (oldIndex, 0, 5)];
+}
 
 class RoomModel
 {
@@ -42,12 +80,12 @@ public:
     void prepare (double sampleRate)
     {
         fs = sampleRate;
-        input.prepare ((int) std::ceil (0.40 * fs));
+        input.prepare ((int) std::ceil (0.80 * fs));
         for (auto& l : lines)
             l.prepare ((int) std::ceil (0.12 * fs));
-        // Reference IR energies per room type for normalisation (done off the audio thread).
-        for (int t = 0; t < numRoomTypes; ++t)
-            refEnergy[(size_t) t] = t >= 2 ? measureTailEnergy (t) : 1.0;
+        // Reference IR energies per room type for normalisation (done off the audio thread,
+        // computed once per sample rate and shared by all instances).
+        refEnergy = referenceEnergies (fs);
         configure (roomOff, 1.0);
         reset();
     }
@@ -69,7 +107,7 @@ public:
     {
         roomType = type;
         const auto& s = roomSpec (type);
-        if (type >= 2)
+        if (roomHasTail (type))
         {
             const double V = s.width * s.length * s.height;
             const double S = 2.0 * (s.width * s.length + s.width * s.height + s.length * s.height);
@@ -90,7 +128,7 @@ public:
     {
         decay = std::clamp (decayScale, 0.25, 4.0);
         const auto& s = roomSpec (roomType);
-        if (roomType < 2)
+        if (! roomHasTail (roomType))
             return;
         const double t60 = s.t60 * decay;
         const double t60hf = t60 * s.hfRatio;
@@ -107,7 +145,7 @@ public:
         const double S = 2.0 * (s.width * s.length + s.width * s.height + s.length * s.height);
         wallReflection = std::sqrt (std::clamp (1.0 - 0.161 * V / (S * t60), 0.05, 0.95)); // Sabine mean absorption
         criticalDist = models::criticalDistance (V, t60);
-        tailNorm = 1.0 / std::sqrt (refEnergy[(size_t) roomType] * decay);
+        tailNorm = s.tailScale / std::sqrt (refEnergy[(size_t) roomType] * decay);
     }
 
     double criticalDistance() const noexcept { return criticalDist; }
@@ -136,7 +174,7 @@ public:
             return;
         }
 
-        if (roomType == roomOutdoor)
+        if (roomSpec (roomType).kind == RoomKind::openField)
         {
             // Ground reflection only (source and listener at ear height 1.6 m); grass/soil lowers
             // the reflection factor (listening calibration).
@@ -178,7 +216,8 @@ public:
             const double dx = img[i][0] - lx, dy = img[i][1] - ly, dz = img[i][2] - lz;
             const double d = std::sqrt (dx * dx + dy * dy + dz * dz);
             const double delaySamples = std::max (0.0, (d - rEff) / kSpeedOfSound * fs);
-            const double g = wallReflection * std::pow (recDistance / d, rolloffExp) * levelLin;
+            const bool open = i == 5 && s.kind == RoomKind::openWalls; // no ceiling outdoors
+            const double g = open ? 0.0 : wallReflection * std::pow (recDistance / d, rolloffExp) * levelLin;
             const double az = std::atan2 (dx, dy);
             double pl, pr;
             panGains (std::sin (az), pl, pr);
@@ -213,7 +252,7 @@ public:
     {
         input.push (x);
         float eL = 0, eR = 0;
-        const int nRefl = roomType == roomOutdoor ? 1 : numReflections;
+        const int nRefl = roomSpec (roomType).kind == RoomKind::openField ? 1 : numReflections;
         for (int i = 0; i < nRefl; ++i)
         {
             auto& e = er[(size_t) i];
@@ -233,7 +272,7 @@ public:
 
         fdnGain.step();
         fdnInDelay.step();
-        if (roomType >= 2)
+        if (roomHasTail (roomType))
         {
             const float in = input.read ((float) fdnInDelay.cur) * (float) fdnGain.cur;
             float s[numLines];
@@ -270,10 +309,10 @@ public:
     double predictedEnergy() const noexcept
     {
         double e = 0;
-        const int nRefl = roomType == roomOutdoor ? 1 : numReflections;
+        const int nRefl = roomSpec (roomType).kind == RoomKind::openField ? 1 : numReflections;
         for (int i = 0; i < nRefl; ++i)
             e += er[(size_t) i].gainL.target * er[(size_t) i].gainL.target + er[(size_t) i].gainR.target * er[(size_t) i].gainR.target;
-        if (roomType >= 2)
+        if (roomHasTail (roomType))
             e += fdnGain.target * fdnGain.target;
         return e;
     }
@@ -306,6 +345,23 @@ private:
         const double th = (std::clamp (p, -1.0, 1.0) + 1.0) * kPi / 4.0;
         l = std::cos (th);
         r = std::sin (th);
+    }
+
+    static std::array<double, numRoomTypes> referenceEnergies (double sampleRate)
+    {
+        static std::mutex mutex;
+        static std::map<long long, std::array<double, numRoomTypes>> cache;
+        const std::lock_guard<std::mutex> lock (mutex);
+        const auto key = (long long) std::llround (sampleRate);
+        if (auto it = cache.find (key); it != cache.end())
+            return it->second;
+        RoomModel probe;
+        probe.fs = sampleRate;
+        std::array<double, numRoomTypes> e {};
+        for (int t = 0; t < numRoomTypes; ++t)
+            e[(size_t) t] = roomHasTail (t) ? probe.measureTailEnergy (t) : 1.0;
+        cache[key] = e;
+        return e;
     }
 
     // Tail IR energy (sum over L+R) for unit input gain, used to normalise the tail so its total
@@ -345,7 +401,7 @@ private:
     std::array<int, numLines> delays { 331, 373, 419, 467, 521, 577, 631, 691 };
     std::array<float, numLines> lineGain {}, lineFb {}, damp {};
     std::array<Reflection, numReflections> er {};
-    std::array<double, numRoomTypes> refEnergy { 1, 1, 1, 1, 1, 1 };
+    std::array<double, numRoomTypes> refEnergy {};
     Ramp fdnGain, fdnInDelay;
     double wallReflection = 0.8, criticalDist = 1.0, tailNorm = 1.0;
     float erLpL = 0, erLpR = 0;

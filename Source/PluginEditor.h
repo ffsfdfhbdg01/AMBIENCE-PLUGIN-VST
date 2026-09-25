@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "PluginProcessor.h"
+#include "UpdateChecker.h"
 #include "ui/LookAndFeel.h"
 #include "ui/Meters.h"
 #include "ui/StageView.h"
@@ -51,6 +52,22 @@ private:
     juce::ParameterAttachment attachment;
 };
 
+// Flat icon button (power / gear) drawn with vector paths.
+class IconButton : public juce::Button
+{
+public:
+    enum class Icon
+    {
+        power,
+        gear
+    };
+    IconButton (Icon i, const juce::String& name) : juce::Button (name), icon (i) {}
+    void paintButton (juce::Graphics&, bool highlighted, bool down) override;
+
+private:
+    Icon icon;
+};
+
 class Card : public juce::Component
 {
 public:
@@ -83,6 +100,8 @@ private:
     void showScaleMenu();
     void switchAB (int slot);
     void setScale (int percent);
+    void showSettingsMenu();
+    void checkForUpdates();
 
     AmbienceProcessor& proc;
     ui::AmbienceLookAndFeel lnf;
@@ -95,6 +114,9 @@ private:
     juce::TextButton prevBtn { juce::String::fromUTF8 ("\xe2\x80\xb9") }, nextBtn { juce::String::fromUTF8 ("\xe2\x80\xba") },
         saveBtn { "Save" }, menuBtn { juce::String::fromUTF8 ("\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2") };
     juce::TextButton undoBtn { "Undo" }, redoBtn { "Redo" }, abA { "A" }, abB { "B" }, scaleBtn { "100%" };
+    ui::IconButton powerBtn { ui::IconButton::Icon::power, "Power" }, settingsBtn { ui::IconButton::Icon::gear, "Settings" };
+    juce::ParameterAttachment powerAttachment;
+    UpdateChecker updateChecker;
 
     // Toolbar
     ui::Segmented inputSeg, renderSeg;

@@ -421,7 +421,7 @@ int main()
         EngineParams p;
         p.distance = 12;
         p.pan = -40;
-        p.room = 4;
+        p.room = 10;
         p.obstacle = 2;
         p.material = 4;
         p.leak = 20;
@@ -492,22 +492,57 @@ int main()
         near (gainToDb (onR * std::sqrt (2.0) / inR), 0.0, 3.0, "auto gain restores level (RMS proxy)");
     } });
 
-    tests.push_back ({ "15. CPU benchmark (informative)", [&]
+    tests.push_back ({ "14b. All 16 room variants render; v1 room migration", [&]
     {
-        const int n = 48000 * 10;
+        const auto x = pinkNoise (48000);
+        for (int room = 0; room < numRoomTypes; ++room)
+        {
+            EngineParams p;
+            p.room = room;
+            p.distance = 6;
+            const auto o = render (p, { x }, 2);
+            bool finite = true;
+            for (auto& ch : o)
+                for (float v : ch)
+                    finite = finite && std::isfinite (v);
+            const double level = gainToDb (rms (o[0].data() + 24000, 24000) / rms (x.data() + 24000, 24000));
+            check (finite && level > -40.0 && level < 12.0,
+                   std::string (roomSpec (room).name) + ": finite, level " + std::to_string (level) + " dB");
+        }
+        // Tail length ordering within a size group: B (damped) < A < C (live).
+        for (int base : { 4, 7, 10, 13 })
+            check (roomSpec (base + 1).t60 < roomSpec (base).t60 && roomSpec (base).t60 < roomSpec (base + 2).t60,
+                   std::string ("T60 order B < A < C for ") + roomSpec (base).name);
+        check (migrateRoomIndexV1 (0) == 0 && migrateRoomIndexV1 (1) == 1 && migrateRoomIndexV1 (2) == 4 && migrateRoomIndexV1 (3) == 7
+                   && migrateRoomIndexV1 (4) == 10 && migrateRoomIndexV1 (5) == 13,
+               "v1 -> v2 room index migration");
+    } });
+
+    tests.push_back ({ "15. CPU benchmark (informative, processing only)", [&]
+    {
+        const int n = 48000 * 10, block = 512;
         const auto x = pinkNoise (n);
+        std::vector<float> l ((size_t) block), r ((size_t) block);
         for (int roomOn = 0; roomOn < 2; ++roomOn)
         {
             EngineParams p;
             p.distance = 10;
             p.pan = 30;
-            p.room = roomOn ? 3 : 0;
+            p.room = roomOn ? 7 : 0;
+            SpatialEngine e;
+            e.prepare (fs, block);
+            e.setParams (p);
             const auto t0 = std::chrono::steady_clock::now();
-            const auto o = render (p, { x, x }, 2, fs, 512);
+            for (int s0 = 0; s0 < n; s0 += block)
+            {
+                const float* ip[2] = { x.data() + s0, x.data() + s0 };
+                float* op[2] = { l.data(), r.data() };
+                e.process (ip, 2, op, 2, block);
+            }
             const auto t1 = std::chrono::steady_clock::now();
             const double secs = std::chrono::duration<double> (t1 - t0).count();
-            std::printf ("    %s: %.3f %% of one core (48 kHz stereo)\n", roomOn ? "Room Medium" : "Room Off", 100.0 * secs / 10.0);
-            check (o[0].size() == (size_t) n, "rendered");
+            std::printf ("    %s: %.3f %% of one core (48 kHz stereo)\n", roomOn ? "Room Medium A" : "Room Off", 100.0 * secs / 10.0);
+            check (std::isfinite (l[0]), "rendered");
         }
     } });
 

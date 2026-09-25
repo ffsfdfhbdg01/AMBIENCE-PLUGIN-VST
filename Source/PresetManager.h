@@ -8,7 +8,7 @@
 class PresetManager
 {
 public:
-    static constexpr int presetFormatVersion = 1;
+    static constexpr int presetFormatVersion = 2; // 2: 16 room variants
     static inline const juce::String extension { ".ambpreset" };
 
     explicit PresetManager (juce::AudioProcessorValueTreeState& state);

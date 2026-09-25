@@ -111,7 +111,7 @@ void StageView::paint (juce::Graphics& g)
 
     // Room extent (dashed) — radius of the room's half-diagonal footprint.
     const int roomType = (int) value (amb::pid::room);
-    if (roomType >= 2)
+    if (amb::roomHasTail (roomType))
     {
         const auto& spec = amb::roomSpec (roomType);
         const float ext = (float) (0.5 * std::sqrt (spec.width * spec.width + spec.length * spec.length));
@@ -124,13 +124,13 @@ void StageView::paint (juce::Graphics& g)
         g.setColour (colours::cool.withAlpha (0.45f));
         g.fillPath (dashed);
         g.setFont (AmbienceLookAndFeel::font (11.5f, true));
-        g.drawText (juce::String (spec.name).toUpperCase(), juce::Rectangle<float> (l.x - 80, l.y - rr * vs - 18, 160, 14), juce::Justification::centred);
+        g.drawText (juce::String (spec.name).toUpperCase(), juce::Rectangle<float> (l.x - 110, l.y - rr * vs - 18, 220, 14), juce::Justification::centred);
     }
-    else if (roomType == 1)
+    else if (roomType != amb::roomOff)
     {
         g.setColour (colours::cool.withAlpha (0.5f));
         g.setFont (AmbienceLookAndFeel::font (11.5f, true));
-        g.drawText ("OUTDOOR", bounds.reduced (14, 10).removeFromTop (14), juce::Justification::topRight);
+        g.drawText (juce::String (amb::roomSpec (roomType).name).toUpperCase(), bounds.reduced (14, 10).removeFromTop (14), juce::Justification::topRight);
     }
 
     // Distance rings with labels.

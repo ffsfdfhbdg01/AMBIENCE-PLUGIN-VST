@@ -8,7 +8,7 @@
 class AmbienceProcessor : public juce::AudioProcessor
 {
 public:
-    static constexpr int stateVersion = 1;
+    static constexpr int stateVersion = 2; // 2: room list extended to 16 variants
 
     AmbienceProcessor();
     ~AmbienceProcessor() override = default;

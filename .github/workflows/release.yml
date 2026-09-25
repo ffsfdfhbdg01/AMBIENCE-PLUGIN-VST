@@ -64,9 +64,9 @@ jobs:
           [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx", [Convert]::FromBase64String($env:PFX_BASE64))
           $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1
           echo "SIGNTOOL=$($signtool.FullName)" >> $env:GITHUB_ENV
-          $files = @("build\Ambience_artefacts\Release\VST3\Ambience.vst3\Contents\x86_64-win\Ambience.vst3",
-                     "build\Ambience_artefacts\Release\Standalone\Ambience.exe")
-          & $signtool.FullName sign /f "$env:RUNNER_TEMP\cert.pfx" /p "$env:PFX_PASSWORD" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /d "Ambience" $files
+          $files = @("build\Ambience_artefacts\Release\VST3\SAMS AMBIENCE CONTROL.vst3\Contents\x86_64-win\SAMS AMBIENCE CONTROL.vst3",
+                     "build\Ambience_artefacts\Release\Standalone\SAMS AMBIENCE CONTROL.exe")
+          & $signtool.FullName sign /f "$env:RUNNER_TEMP\cert.pfx" /p "$env:PFX_PASSWORD" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /d "SAMS AMBIENCE CONTROL" $files
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
       # --- Code signing, option B: Azure Trusted Signing (Artifact Signing) -----------------
@@ -101,7 +101,7 @@ jobs:
         env:
           PFX_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
-          & $env:SIGNTOOL sign /f "$env:RUNNER_TEMP\cert.pfx" /p "$env:PFX_PASSWORD" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /d "Ambience Installer" (Get-ChildItem dist\*.exe).FullName
+          & $env:SIGNTOOL sign /f "$env:RUNNER_TEMP\cert.pfx" /p "$env:PFX_PASSWORD" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /d "SAMS AMBIENCE CONTROL Installer" (Get-ChildItem dist\*.exe).FullName
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Remove-Item "$env:RUNNER_TEMP\cert.pfx"
 
@@ -128,7 +128,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Ambience-Windows-Installer
+          name: SAMS-Ambience-Control-Windows-Installer
           path: dist/*.exe
 
   macos:
@@ -175,7 +175,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Ambience-macOS-Installer
+          name: SAMS-Ambience-Control-macOS-Installer
           path: dist/*.pkg
 
   release:
@@ -198,7 +198,7 @@ jobs:
           ls -la dist
       - uses: softprops/action-gh-release@v2
         with:
-          name: Ambience ${{ needs.version.outputs.version }}
+          name: SAMS AMBIENCE CONTROL ${{ needs.version.outputs.version }}
           tag_name: ${{ needs.version.outputs.tag }}
           target_commitish: ${{ github.sha }}
           body_path: ${{ runner.temp }}/notes.md

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the macOS installer package (Ambience-<version>-macOS.pkg).
+# Builds the macOS installer package (SAMS-Ambience-Control-<version>-macOS.pkg).
 #
 #   installer/macos/build_pkg.sh <version> <artefacts dir> <output dir>
 #   e.g. installer/macos/build_pkg.sh 1.0.0 build/Ambience_artefacts/Release dist
@@ -22,6 +22,7 @@ OUT="${3:?output dir}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WORK="$(mktemp -d)"
 ID_BASE="com.ambienceaudio.ambience"
+NAME="SAMS AMBIENCE CONTROL"
 mkdir -p "$OUT"
 
 sign_bundle() {
@@ -36,10 +37,15 @@ sign_bundle() {
     codesign --verify --deep --strict --verbose=2 "$bundle"
 }
 
-# $1 component id, $2 bundle path, $3 install location
+# $1 component id, $2 bundle path, $3 install location, $4 name of a legacy bundle to remove
 make_component() {
-    local id="$1" bundle="$2" location="$3"
+    local id="$1" bundle="$2" location="$3" legacy="$4"
     local root="$WORK/root-$id"
+    # preinstall: remove the bundle published as "Ambience" in 1.0.0 (same plug-in ID, would appear twice).
+    local scripts="$WORK/scripts-$id"
+    mkdir -p "$scripts"
+    printf '#!/bin/sh\n# $2 = chosen install location\nrm -rf "$2/%s"\nexit 0\n' "$legacy" > "$scripts/preinstall"
+    chmod +x "$scripts/preinstall"
     mkdir -p "$root"
     ditto "$bundle" "$root/$(basename "$bundle")"
     sign_bundle "$root/$(basename "$bundle")"
@@ -49,6 +55,7 @@ make_component() {
     plutil -replace 0.BundleOverwriteAction -string upgrade "$WORK/$id.plist"
     pkgbuild --root "$root" \
              --component-plist "$WORK/$id.plist" \
+             --scripts "$scripts" \
              --identifier "$ID_BASE.$id" \
              --version "$VERSION" \
              --install-location "$location" \
@@ -56,14 +63,14 @@ make_component() {
 }
 
 mkdir -p "$WORK/pkgs"
-make_component vst3 "$ART/VST3/Ambience.vst3" "/Library/Audio/Plug-Ins/VST3"
-make_component au "$ART/AU/Ambience.component" "/Library/Audio/Plug-Ins/Components"
-make_component standalone "$ART/Standalone/Ambience.app" "/Applications"
+make_component vst3 "$ART/VST3/$NAME.vst3" "/Library/Audio/Plug-Ins/VST3" "Ambience.vst3"
+make_component au "$ART/AU/$NAME.component" "/Library/Audio/Plug-Ins/Components" "Ambience.component"
+make_component standalone "$ART/Standalone/$NAME.app" "/Applications" "Ambience.app"
 
 sed "s/@VERSION@/$VERSION/g" "$HERE/distribution.xml" > "$WORK/distribution.xml"
 
 UNSIGNED="$WORK/Ambience-unsigned.pkg"
-FINAL="$OUT/Ambience-$VERSION-macOS.pkg"
+FINAL="$OUT/SAMS-Ambience-Control-$VERSION-macOS.pkg"
 productbuild --distribution "$WORK/distribution.xml" \
              --package-path "$WORK/pkgs" \
              --resources "$HERE/resources" \

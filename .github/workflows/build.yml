@@ -45,7 +45,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+          sudo apt-get install -y libcurl4-openssl-dev libasound2-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev \
             libxext-dev libxcomposite-dev libfreetype-dev libfontconfig1-dev libgl1-mesa-dev xvfb
 
       - name: Configure
@@ -65,7 +65,7 @@ jobs:
         run: |
           curl -sSL -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/latest/download/${{ matrix.pluginval }}"
           unzip -q pluginval.zip
-          VST3=build/Ambience_artefacts/Release/VST3/Ambience.vst3
+          VST3="build/Ambience_artefacts/Release/VST3/SAMS AMBIENCE CONTROL.vst3"
           case "$RUNNER_OS" in
             Linux)   xvfb-run -a ./pluginval --strictness-level 10 --validate-in-process "$VST3" ;;
             macOS)   ./pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate-in-process "$VST3" ;;
@@ -75,7 +75,7 @@ jobs:
       - name: Upload artefacts
         uses: actions/upload-artifact@v4
         with:
-          name: Ambience-${{ matrix.name }}
+          name: SAMS-Ambience-Control-${{ matrix.name }}
           path: |
             build/Ambience_artefacts/Release/VST3
             build/Ambience_artefacts/Release/AU

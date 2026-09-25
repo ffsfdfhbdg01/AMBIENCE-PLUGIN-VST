@@ -73,6 +73,51 @@ void Segmented::setEnabledAll (bool e)
         b->setEnabled (e);
 }
 
+void IconButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
+{
+    const auto b = getLocalBounds().toFloat().reduced (0.5f);
+    const bool on = getToggleState();
+    g.setColour (highlighted || down ? colours::surfaceRaised.brighter (0.08f) : colours::surfaceRaised);
+    g.fillRoundedRectangle (b, 5.0f);
+    g.setColour (icon == Icon::power && on ? colours::accent : colours::line);
+    g.drawRoundedRectangle (b, 5.0f, 1.0f);
+
+    const auto c = b.getCentre();
+    const float r = std::min (b.getWidth(), b.getHeight()) * 0.26f;
+    if (icon == Icon::power)
+    {
+        const auto colour = on ? colours::accent : colours::textFaint;
+        g.setColour (colour);
+        juce::Path arc;
+        arc.addCentredArc (c.x, c.y, r, r, 0, juce::degreesToRadians (35.0f), juce::degreesToRadians (325.0f), true);
+        g.strokePath (arc, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.drawLine (c.x, c.y - r * 1.25f, c.x, c.y - r * 0.15f, 1.8f);
+    }
+    else
+    {
+        g.setColour (highlighted ? colours::text : colours::textDim);
+        juce::Path gear;
+        const int teeth = 8;
+        for (int i = 0; i < teeth * 2; ++i)
+        {
+            const float a0 = juce::MathConstants<float>::twoPi * (float) i / (teeth * 2);
+            const float a1 = juce::MathConstants<float>::twoPi * (float) (i + 1) / (teeth * 2);
+            const float rr = (i % 2 == 0) ? r * 1.25f : r * 0.95f;
+            const juce::Point<float> p0 (c.x + rr * std::sin (a0), c.y - rr * std::cos (a0));
+            const juce::Point<float> p1 (c.x + rr * std::sin (a1), c.y - rr * std::cos (a1));
+            if (i == 0)
+                gear.startNewSubPath (p0);
+            else
+                gear.lineTo (p0);
+            gear.lineTo (p1);
+        }
+        gear.closeSubPath();
+        gear.addEllipse (c.x - r * 0.45f, c.y - r * 0.45f, r * 0.9f, r * 0.9f);
+        gear.setUsingNonZeroWinding (false);
+        g.fillPath (gear);
+    }
+}
+
 void Card::paint (juce::Graphics& g)
 {
     const auto r = getLocalBounds().toFloat();
@@ -226,7 +271,14 @@ AmbienceEditor::AmbienceEditor (AmbienceProcessor& p)
       amountKnob (p.apvts, pid::amount, "Amount", "0 % = no obstacle, 100 % = full obstacle. Automate it to open a door."),
       sizeKnob (p.apvts, pid::obstacleSize, "Size", "Detour around the obstacle (path-length difference, Maekawa)."),
       outputKnob (p.apvts, pid::output, "Output", "Output gain."),
-      meters (p)
+      meters (p),
+      powerAttachment (*p.apvts.getParameter ("bypass"),
+                       [this] (float bypassed)
+                       {
+                           powerBtn.setToggleState (bypassed < 0.5f, juce::dontSendNotification);
+                           repaint();
+                       },
+                       p.apvts.undoManager)
 {
     const int initialScale = juce::jlimit (50, 200, proc.uiScalePercent.load());
     setLookAndFeel (&lnf);
@@ -235,8 +287,14 @@ AmbienceEditor::AmbienceEditor (AmbienceProcessor& p)
     content.addMouseListener (this, true);
 
     // Header
-    for (auto* c : std::initializer_list<juce::Component*> { &presetBox, &prevBtn, &nextBtn, &saveBtn, &menuBtn, &undoBtn, &redoBtn, &abA, &abB, &scaleBtn })
+    for (auto* c : std::initializer_list<juce::Component*> { &presetBox, &prevBtn, &nextBtn, &saveBtn, &menuBtn, &undoBtn, &redoBtn, &abA, &abB, &scaleBtn,
+                                                             &powerBtn, &settingsBtn })
         content.addAndMakeVisible (c);
+    powerBtn.setTooltip ("On / Off (bypass). Off passes the signal through unchanged.");
+    powerBtn.onClick = [this] { powerAttachment.setValueAsCompleteGesture (powerBtn.getToggleState() ? 1.0f : 0.0f); };
+    powerAttachment.sendInitialUpdate();
+    settingsBtn.setTooltip ("Settings: check for updates, about");
+    settingsBtn.onClick = [this] { showSettingsMenu(); };
     presetBox.setTextWhenNothingSelected ("Init (Neutral)");
     presetBox.setTooltip ("Presets");
     presetBox.onChange = [this]
@@ -299,7 +357,18 @@ AmbienceEditor::AmbienceEditor (AmbienceProcessor& p)
                 for (int i = 0; i < (int) s.choices.size(); ++i)
                     box.addItem (s.choices[(size_t) i], i + 1);
     };
-    fillCombo (roomBox, pid::room);
+    {
+        // Room list grouped by size (item ID = parameter index + 1, as the attachment expects).
+        const auto& names = paramSpecs()[14].choices;
+        roomBox.addItem (names[0], 1);
+        const std::pair<const char*, int> groups[] = { { "OPEN", 1 }, { "SMALL", 4 }, { "MEDIUM", 7 }, { "LARGE", 10 }, { "HALL", 13 } };
+        for (auto& [heading, first] : groups)
+        {
+            roomBox.addSectionHeading (heading);
+            for (int i = first; i < first + 3; ++i)
+                roomBox.addItem (names[(size_t) i], i + 1);
+        }
+    }
     fillCombo (obstacleBox, pid::obstacle);
     fillCombo (materialBox, pid::material);
     roomBox.setTooltip ("Source room. Off = direct cues only (use your own reverb sends).");
@@ -346,13 +415,14 @@ void AmbienceEditor::paint (juce::Graphics& g)
 
     // Wordmark
     g.setColour (col::text);
-    g.setFont (ui::AmbienceLookAndFeel::font (17.0f, true));
-    g.drawText ("AMBIENCE", juce::Rectangle<int> (16, 13, 120, 22), juce::Justification::centredLeft);
+    g.setFont (ui::AmbienceLookAndFeel::font (15.0f, true));
+    g.drawText ("SAMS", juce::Rectangle<int> (52, 13, 60, 20), juce::Justification::centredLeft);
     g.setColour (col::accent);
-    g.fillEllipse (118.0f, 21.0f, 6.0f, 6.0f);
+    g.drawText ("AMBIENCE CONTROL", juce::Rectangle<int> (97, 13, 170, 20), juce::Justification::centredLeft);
     g.setColour (col::textFaint);
     g.setFont (ui::AmbienceLookAndFeel::font (10.5f));
-    g.drawText (juce::String::fromUTF8 ("distance \xc2\xb7 direction \xc2\xb7 obstacles"), juce::Rectangle<int> (16, 33, 200, 14), juce::Justification::centredLeft);
+    g.drawText (juce::String::fromUTF8 ("distance \xc2\xb7 direction \xc2\xb7 obstacles  \xc2\xb7  v") + JucePlugin_VersionString,
+                juce::Rectangle<int> (52, 32, 220, 14), juce::Justification::centredLeft);
 
     // Toolbar captions
     g.setColour (col::textDim);
@@ -378,7 +448,10 @@ void AmbienceEditor::layoutContent()
     // Header (wordmark painted by the header area below via a Label-free approach)
     auto area = juce::Rectangle<int> (0, 0, baseWidth, baseHeight).reduced (16, 0);
     auto header = area.removeFromTop (54).withTrimmedTop (12).withTrimmedBottom (10);
-    header.removeFromLeft (190); // wordmark
+    powerBtn.setBounds (header.removeFromLeft (28));
+    header.removeFromLeft (252); // wordmark
+    settingsBtn.setBounds (header.removeFromRight (32));
+    header.removeFromRight (6);
     scaleBtn.setBounds (header.removeFromRight (58));
     header.removeFromRight (8);
     abB.setBounds (header.removeFromRight (30));
@@ -387,7 +460,7 @@ void AmbienceEditor::layoutContent()
     redoBtn.setBounds (header.removeFromRight (48));
     header.removeFromRight (4);
     undoBtn.setBounds (header.removeFromRight (48));
-    header.removeFromRight (16);
+    header.removeFromRight (12);
     auto presetArea = header;
     prevBtn.setBounds (presetArea.removeFromLeft (26));
     presetArea.removeFromLeft (4);
@@ -473,10 +546,27 @@ void AmbienceEditor::timerCallback()
     amountKnob.setEnabled (obstacle != 0);
     roomLevelKnob.setEnabled (proc.apvts.getRawParameterValue (pid::room)->load() > 0.5f);
 
-    // Status line: headphone note and mono warning.
+    const bool powered = powerBtn.getToggleState();
+    for (juce::Component* c : { (juce::Component*) &stage, (juce::Component*) &positionCard, (juce::Component*) &roomCard, (juce::Component*) &obstacleCard,
+                                (juce::Component*) &distanceKnob, (juce::Component*) &panKnob, (juce::Component*) &widthKnob, (juce::Component*) &roomLevelKnob,
+                                (juce::Component*) &amountKnob, (juce::Component*) &sizeKnob, (juce::Component*) &roomBox, (juce::Component*) &obstacleBox,
+                                (juce::Component*) &materialBox })
+        c->setAlpha (powered ? 1.0f : 0.4f);
+
+    // Status line: bypass, headphone note and mono warning.
     const bool headphones = proc.apvts.getRawParameterValue (pid::renderMode)->load() > 0.5f && ! mono;
     const bool monoSafe = proc.apvts.getRawParameterValue (pid::monoSafe)->load() > 0.5f;
-    if (headphones)
+    if (updateChecker.isChecking())
+    {
+        statusLabel.setText ("Checking for updates...", juce::dontSendNotification);
+        statusLabel.setColour (juce::Label::textColourId, col::textDim);
+    }
+    else if (! powered)
+    {
+        statusLabel.setText (juce::String::fromUTF8 ("OFF \xe2\x80\x94 bypassed"), juce::dontSendNotification);
+        statusLabel.setColour (juce::Label::textColourId, col::warn);
+    }
+    else if (headphones)
     {
         statusLabel.setText ("Headphones render is not mono-compatible", juce::dontSendNotification);
         statusLabel.setColour (juce::Label::textColourId, col::cool);
@@ -621,4 +711,65 @@ void AmbienceEditor::mouseDown (const juce::MouseEvent&)
 {
     // Every mouse gesture starts a new undo transaction.
     proc.undoManager.beginNewTransaction();
+}
+
+void AmbienceEditor::showSettingsMenu()
+{
+    juce::PopupMenu m;
+    m.addSectionHeader ("SAMS AMBIENCE CONTROL  v" + UpdateChecker::currentVersion());
+    m.addItem (1, "Check for updates...", ! updateChecker.isChecking());
+    m.addItem (2, "Open download page (GitHub)");
+    m.addSeparator();
+    m.addItem (3, "Show preset folder");
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&settingsBtn),
+                     [this] (int r)
+                     {
+                         if (r == 1)
+                             checkForUpdates();
+                         else if (r == 2)
+                             juce::URL (UpdateChecker::releasesPageUrl()).launchInDefaultBrowser();
+                         else if (r == 3)
+                         {
+                             auto dir = PresetManager::userPresetFolder();
+                             dir.createDirectory();
+                             dir.revealToUser();
+                         }
+                     });
+}
+
+void AmbienceEditor::checkForUpdates()
+{
+    juce::Component::SafePointer<AmbienceEditor> safe (this);
+    updateChecker.checkAsync ([safe] (const UpdateChecker::Result& r)
+    {
+        if (safe == nullptr)
+            return;
+        using Status = UpdateChecker::Result::Status;
+        auto options = juce::MessageBoxOptions().withAssociatedComponent (safe.getComponent()).withTitle ("SAMS AMBIENCE CONTROL");
+
+        if (r.status == Status::updateAvailable)
+        {
+            const auto url = r.releaseUrl;
+            juce::AlertWindow::showAsync (options.withIconType (juce::MessageBoxIconType::NoIcon)
+                                              .withMessage ("A new version is available: " + r.latestVersion + "\nInstalled version: " + r.currentVersion
+                                                            + "\n\nDo you want to update now? The download page on GitHub will open.")
+                                              .withButton ("Yes, update")
+                                              .withButton ("Not now"),
+                                          [url] (int result)
+                                          {
+                                              if (result == 1)
+                                                  juce::URL (url).launchInDefaultBrowser();
+                                          });
+        }
+        else if (r.status == Status::upToDate)
+            juce::AlertWindow::showAsync (options.withIconType (juce::MessageBoxIconType::NoIcon)
+                                              .withMessage ("You are using the latest version (" + r.currentVersion + ").")
+                                              .withButton ("OK"),
+                                          nullptr);
+        else
+            juce::AlertWindow::showAsync (options.withIconType (juce::MessageBoxIconType::NoIcon)
+                                              .withMessage ("Could not check for updates.\n" + r.error)
+                                              .withButton ("OK"),
+                                          nullptr);
+    });
 }
