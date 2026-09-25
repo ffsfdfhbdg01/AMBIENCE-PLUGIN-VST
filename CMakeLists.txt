@@ -46,7 +46,11 @@ if(AMBIENCE_BUILD_PLUGIN)
     set(AMBIENCE_COMPANY_NAME "Ambience Audio" CACHE STRING "Company name shown in hosts")
     set(AMBIENCE_MANUFACTURER_CODE "Ambi" CACHE STRING "4-char manufacturer code (placeholder, change before release)")
 
+    # Release builds pass -DAMBIENCE_VERSION=<tag version>.
+    set(AMBIENCE_VERSION "${PROJECT_VERSION}" CACHE STRING "Plugin version shown to hosts")
+
     juce_add_plugin(Ambience
+        VERSION ${AMBIENCE_VERSION}
         COMPANY_NAME "${AMBIENCE_COMPANY_NAME}"
         PLUGIN_MANUFACTURER_CODE ${AMBIENCE_MANUFACTURER_CODE}
         PLUGIN_CODE Ambc

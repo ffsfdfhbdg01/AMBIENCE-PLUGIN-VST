@@ -66,6 +66,48 @@ python3 tools/plot_responses.py build-tests/ambience_render docs/img   # wykresy
 ```
 CI (GitHub Actions) buduje wtyczkę na Windows, macOS i Linuksie, uruchamia testy i **pluginval** (strictness 10). Lokalnie zweryfikowano też walidatorem VST3 Steinberga: 47/47 testów.
 
+## Instalatory (Windows i macOS)
+
+Instalatory buduje GitHub Actions (`.github/workflows/release.yml`):
+
+- **tag `v1.2.3`** — buduje instalatory i publikuje je w zakładce *Releases*;
+- **przycisk „Run workflow”** (Actions → Installers) albo zmiana w `installer/` — instalatory trafiają do artefaktów przebiegu.
+
+| | Windows (`Ambience-x.y.z-Windows-Setup.exe`) | macOS (`Ambience-x.y.z-macOS.pkg`) |
+|---|---|---|
+| Domyślna lokalizacja | `C:\Program Files\Common Files\VST3` | `/Library/Audio/Plug-Ins/VST3` i `/Library/Audio/Plug-Ins/Components` |
+| Tylko dla bieżącego użytkownika | `%LOCALAPPDATA%\Programs\Common\VST3` (wybór na starcie instalatora) | `~/Library/Audio/Plug-Ins/…` (krok *Wybór miejsca docelowego* → „Zainstaluj tylko dla mnie”) |
+| Zmiana lokalizacji | dowolny folder na stronie *Wybierz docelową lokalizację* | wybór dysku oraz „dla wszystkich / tylko dla mnie” (standardowe katalogi wtyczek, w których szukają hosty) |
+| Komponenty | VST3 (zawsze) + opcjonalnie Standalone | VST3, AU, Standalone (przycisk *Dostosuj*) |
+| Deinstalacja | Panel sterowania / Ustawienia → Aplikacje | usunięcie plików `Ambience.vst3` / `Ambience.component` |
+
+Instalator Windows ma wersję polską i angielską. Na macOS dowolny folder nie jest możliwy, bo instalator `.pkg` nie pozwala wybrać folderu dla poszczególnych komponentów. Hosty i tak szukają wtyczek wyłącznie w standardowych katalogach.
+
+### Ostrzeżenia bezpieczeństwa — co da się zrobić
+Ostrzeżenia systemu znikają **tylko po podpisaniu kodu certyfikatem wydawcy**. Nie da się ich usunąć w samym instalatorze. Workflow podpisuje automatycznie, jeśli w repozytorium (*Settings → Secrets and variables → Actions*) dodasz sekrety opisane niżej. Bez nich instalatory nadal się budują i działają, ale system ostrzega.
+
+**macOS — Apple Developer Program (99 USD/rok).** Wymaga certyfikatów *Developer ID Application* i *Developer ID Installer* oraz notaryzacji. Po notaryzacji Gatekeeper nie pokazuje żadnego ostrzeżenia.
+
+| Sekret | Zawartość |
+|---|---|
+| `MACOS_CERT_P12_BASE64` | oba certyfikaty wyeksportowane z Pęku kluczy do jednego `.p12`, zakodowane: `base64 -i certs.p12` |
+| `MACOS_CERT_PASSWORD` | hasło do `.p12` |
+| `MACOS_APP_IDENTITY` | np. `Developer ID Application: Jan Kowalski (ABCDE12345)` |
+| `MACOS_INSTALLER_IDENTITY` | np. `Developer ID Installer: Jan Kowalski (ABCDE12345)` |
+| `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` | Apple ID, Team ID i hasło aplikacji (appleid.apple.com → Hasła do aplikacji) — do notaryzacji |
+
+**Windows — certyfikat Authenticode.** Do wyboru są dwie opcje:
+
+- **Azure Trusted Signing** (ok. 10 USD/mies.; najtańsza droga, dla firm i osób z weryfikacją tożsamości). Sekrety: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_SIGNING_ENDPOINT` (np. `https://weu.codesigning.azure.net/`), `AZURE_SIGNING_ACCOUNT`, `AZURE_CERT_PROFILE`.
+- **Certyfikat OV/EV w pliku `.pfx`** od CA (np. Sectigo, DigiCert, Certum). Sekrety: `WINDOWS_CERT_PFX_BASE64` (`base64` pliku `.pfx`) oraz `WINDOWS_CERT_PASSWORD`. Nowe certyfikaty zwykle wymagają sprzętowego klucza lub usługi chmurowej — wtedy wygodniejsza jest opcja Azure.
+
+Workflow podpisuje DLL wtyczki, aplikację Standalone i sam instalator, ze znacznikiem czasu. Od 2024 r. nawet podpisany plik może przez pierwsze dni pokazywać ostrzeżenie SmartScreen, dopóki certyfikat nie zbuduje reputacji (liczba pobrań). Po tym czasie ostrzeżenie znika.
+
+**Instalacja wersji niepodpisanej (do testów):**
+
+- **Windows:** w oknie „System Windows ochronił ten komputer” kliknij *Więcej informacji* → *Uruchom mimo to*.
+- **macOS:** kliknij dwukrotnie `.pkg`, a gdy pojawi się blokada, otwórz *Ustawienia systemowe → Prywatność i ochrona* i kliknij *Otwórz mimo to* (na macOS 14 i starszych wystarczy też prawy klik na pliku → *Otwórz*). Zainstalowane wtyczki mają podpis ad-hoc i nie dostają atrybutu kwarantanny, więc DAW wczytuje je normalnie.
+
 ## Instrukcja obsługi
 
 ### Pasek górny
