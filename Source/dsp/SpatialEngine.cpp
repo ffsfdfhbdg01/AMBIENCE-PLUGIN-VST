@@ -1,0 +1,749 @@
+#include "SpatialEngine.h"
+
+namespace amb
+{
+namespace
+{
+    constexpr double monoSafeMaxTime = 0.30e-3;  // s, band-limited ICTD with Mono-safe ON
+    constexpr double fullMaxTime = 1.0e-3;       // s, full lateralisation by time (Blauert 1997)
+    constexpr double timeCrossover = 1200.0;     // Hz, ITD dominates below ~1.5 kHz (duplex theory)
+    constexpr double decorrelationDepth = 0.8;   // mono-source widening depth at 200 % (listening calibration)
+    constexpr double stereoSideRatio = 0.3;      // assumed S/M energy of stereo material (auto gain model)
+    constexpr double maxDistanceGainDb = 24.0;
+    constexpr double roomFadeSeconds = 0.05;
+
+    std::vector<FitBasis> airBasis()
+    {
+        return { { BiquadType::highShelf, 600, 0.707, -80, 6 },
+                 { BiquadType::highShelf, 1500, 0.707, -80, 6 },
+                 { BiquadType::highShelf, 4000, 0.707, -80, 6 },
+                 { BiquadType::highShelf, 9000, 0.707, -80, 6 },
+                 { BiquadType::highShelf, 14000, 0.707, -80, 6 } };
+    }
+
+    std::vector<FitBasis> obstructionBasis()
+    {
+        return { { BiquadType::highShelf, 150, 0.707, -40, 10 },
+                 { BiquadType::highShelf, 400, 0.707, -40, 10 },
+                 { BiquadType::highShelf, 1000, 0.707, -40, 10 },
+                 { BiquadType::highShelf, 2500, 0.707, -40, 10 },
+                 { BiquadType::highShelf, 6000, 0.707, -40, 10 } };
+    }
+
+    std::vector<FitBasis> occlusionBasis()
+    {
+        return { { BiquadType::lowShelf, 100, 0.707, -40, 40 },
+                 { BiquadType::highShelf, 350, 0.707, -60, 30 },
+                 { BiquadType::highShelf, 1200, 0.707, -60, 30 },
+                 { BiquadType::highShelf, 3500, 0.707, -60, 30 },
+                 { BiquadType::highShelf, 9000, 0.707, -60, 30 },
+                 { BiquadType::peak, 1000, 1.2, -30, 30 },
+                 { BiquadType::peak, 100, 1.4, -30, 30 } };
+    }
+} // namespace
+
+//==============================================================================
+void SpatialEngine::prepare (double sampleRate, int /*maxBlockSize*/)
+{
+    fs = sampleRate;
+    tickCoeff = std::exp (-tickLength / (0.030 * fs));
+    fastCoeff = std::exp (-tickLength / (0.050 * fs));
+
+    for (auto& d : propLine)
+        d.prepare ((int) std::ceil (1000.0 / kSpeedOfSound * fs) + 64);
+    timeLineM[0].prepare ((int) std::ceil (fullMaxTime * fs) + 16);
+    timeLineLP[0].prepare ((int) std::ceil (fullMaxTime * fs) + 16);
+    for (auto& d : hpLine)
+        d.prepare ((int) std::ceil (0.004 * fs) + 16);
+
+    air.prepare (fs, airBasis());
+    obstruction.prepare (fs, obstructionBasis());
+    occlusion.prepare (fs, occlusionBasis());
+    grid = air.fitter.gridFrequencies();
+    fitTarget.assign (grid.size(), 0.0);
+    fitWeight.assign (grid.size(), 1.0);
+
+    // Decorrelator: Schroeder all-passes with mutually prime delays (Kendall 1995 principle).
+    const double apMs[4] = { 3.1, 4.7, 6.3, 11.3 };
+    for (int i = 0; i < 4; ++i)
+        decor[i].prepare ((int) std::round (apMs[i] * 1.0e-3 * fs), 0.6f);
+
+    timeXover.setup (fs, timeCrossover, 0.7071);
+    bassHp1.setup (fs, 80.0, 0.7071);
+    bassHp2.setup (fs, 80.0, 0.7071);
+
+    for (auto& r : rooms)
+        r.prepare (fs);
+
+    reset();
+}
+
+void SpatialEngine::reset()
+{
+    for (auto& f : prox)
+        f.reset();
+    for (auto& d : propLine)
+        d.reset();
+    air.reset();
+    obstruction.reset();
+    occlusion.reset();
+    for (auto& a : decor)
+        a.reset();
+    timeXover.reset();
+    bassHp1.reset();
+    bassHp2.reset();
+    timeLineM[0].reset();
+    timeLineLP[0].reset();
+    for (auto& d : hpLine)
+        d.reset();
+    for (auto& f : hpFilter)
+        f.reset();
+    for (auto& r : rooms)
+        r.reset();
+    tickPos = 0;
+    tickCounter = 0;
+    needsSnap = true;
+}
+
+//==============================================================================
+void SpatialEngine::setParams (const EngineParams& p)
+{
+    params = p;
+    computeTargets();
+}
+
+void SpatialEngine::computeTargets() noexcept
+{
+    const auto& p = params;
+    const bool monoOut = numOutChannels == 1;
+    const double r = std::clamp ((double) p.distance, 0.1, 1000.0);
+    const double rr = std::clamp ((double) p.recDistance, 0.1, 10.0);
+
+    sLogDist.target = std::log (r);
+    sLogRec.target = std::log (rr);
+    sRolloff.target = std::clamp ((double) p.rolloff, 0.0, 12.0) / 6.0206;
+    sPan.target = monoOut ? 0.0 : std::clamp ((double) p.pan, -100.0, 100.0) / 100.0;
+    sTimePan.target = std::clamp ((double) p.timePan, 0.0, 100.0) / 100.0;
+    sPsi.target = p.inputMode == 1 ? 0.0 : (p.inputMode == 2 ? 1.0 : (numInChannels == 2 ? 1.0 : 0.0));
+    sRho.target = (p.renderMode == 1 && ! monoOut) ? 1.0 : 0.0;
+    sMonoSafe.target = p.monoSafe ? 1.0 : 0.0;
+    sWidth.target = monoOut ? 1.0 : std::clamp ((double) p.width, 0.0, 200.0) / 100.0;
+    sPropMix.target = p.propDelay ? 1.0 : 0.0;
+    static const double micB[3] = { 0.0, 0.5, 1.0 }; // gradient share of a 1st-order microphone
+    sMicB.target = micB[std::clamp (p.micPattern, 0, 2)];
+    sAmtObs.target = p.obstacle == 1 ? std::clamp ((double) p.amount, 0.0, 100.0) / 100.0 : 0.0;
+    sAmtOcc.target = p.obstacle == 2 ? std::clamp ((double) p.amount, 0.0, 100.0) / 100.0 : 0.0;
+    sBassMix.target = (p.bassMono > 0 && ! monoOut) ? 1.0 : 0.0;
+    sOutput.target = std::clamp ((double) p.output, -24.0, 24.0);
+    sRoomLevel.target = std::clamp ((double) p.roomLevel, -24.0, 12.0);
+    sDecay.target = std::clamp ((double) p.decay, 50.0, 200.0) / 100.0;
+    sAutoGain.target = p.autoGain ? autoGainTargetDb : 0.0;
+
+    if (p.bassMono > 0 && p.bassMono != bassFreqIndex)
+    {
+        bassFreqIndex = std::clamp (p.bassMono, 1, 8);
+        bassFreq = bassMonoFrequencies()[bassFreqIndex];
+        bassHp1.setup (fs, bassFreq, 0.7071);
+        bassHp2.setup (fs, bassFreq, 0.7071);
+    }
+
+    const int roomType = std::clamp (p.room, 0, numRoomTypes - 1);
+    const int currentType = rooms[(size_t) activeRoom].type();
+    pendingRoom = roomType != currentType || roomFading ? roomType : -1;
+}
+
+//==============================================================================
+void SpatialEngine::panLawGains (int law, double p, double& l, double& r) noexcept
+{
+    p = std::clamp (p, -1.0, 1.0);
+    const double th = (p + 1.0) * kPi / 4.0;
+    const double cl = std::cos (th), cr = std::sin (th);
+    const double ll = 0.5 * (1.0 - p), lr = 0.5 * (1.0 + p);
+    switch (law)
+    {
+        case 0: l = std::min (1.0, 1.0 - p); r = std::min (1.0, 1.0 + p); break; // 0 dB centre
+        case 2: l = std::sqrt (cl * ll); r = std::sqrt (cr * lr); break;         // -4.5 dB
+        case 3: l = ll; r = lr; break;                                            // -6 dB linear
+        default: l = cl; r = cr; break;                                           // -3 dB constant power
+    }
+}
+
+// Spherical-head geometry for one virtual source (Brown & Duda 1998) with near-field parallax:
+// per-ear incidence angle, arrival delay (s), 1/r level ratio and normalised head-shadow alpha.
+void SpatialEngine::headphoneGeometry (double az, double r, double& dL, double& dR, double& gL, double& gR, double& aL, double& aR) const noexcept
+{
+    const double a = models::kHeadRadius;
+    r = std::max (r, a + 0.1);
+    const double sx = r * std::sin (az), sy = r * std::cos (az);
+    const double alphaFront = models::headShadowAlpha (kPi / 2);
+    const double wc = 2.0 * kSpeedOfSound / a;
+    // Near-field cues (1/r level parallax) fade in below 1 m (Brungart & Rabinowitz 1999).
+    const double nearAmount = std::clamp ((1.0 - r) / 0.5, 0.0, 1.0);
+    auto ear = [&] (double side, double& d, double& g, double& alpha)
+    {
+        const double vx = sx - side * a, vy = sy;
+        const double len = std::sqrt (vx * vx + vy * vy);
+        const double cosT = std::clamp ((vx * side) / len, -1.0, 1.0);
+        const double theta = std::acos (cosT);
+        alpha = models::headShadowAlpha (theta) / alphaFront;
+        // The shadow filter's own low-frequency phase delay is removed so the total interaural
+        // delay in the ITD-dominant band (< 1.5 kHz) follows Woodworth's formula.
+        const double wRef = kTwoPi * 750.0; // phase delay removed at a mid-band frequency of the ITD range
+        d = models::earDelaySeconds (theta) + (std::atan (alpha * wRef / wc) - std::atan (wRef / wc)) / wRef;
+        g = lerp (1.0, r / len, nearAmount);
+    };
+    ear (-1.0, dL, gL, aL);
+    ear (1.0, dR, gR, aR);
+}
+
+//==============================================================================
+void SpatialEngine::runFits (bool full) noexcept
+{
+    const auto& p = params;
+    const int nG = (int) grid.size();
+    const int iterations = full ? 25 : 6;
+
+    // --- Air absorption (ISO 9613-1), relative to the recording distance.
+    const bool airOn = p.airAbsorption;
+    const double dr = airOn ? std::max (0.0, (double) std::clamp (p.distance, 0.1f, 1000.0f) - (double) p.recDistance) : 0.0;
+    const bool airDirty = airOn != airFitOn || std::abs (dr - airFitDr) > 1.0e-3 * (1.0 + dr)
+                          || (airOn && (std::abs (p.temperature - airFitT) > 0.01 || std::abs (p.humidity - airFitH) > 0.01));
+
+    const bool obsDirty = std::abs (p.obstacleSize - obsFitDelta) > 1.0e-4;
+    const bool occDirty = p.material != occFitMat || std::abs (p.thickness - occFitThick) > 1.0e-4 || std::abs (p.leak - occFitLeak) > 1.0e-3;
+
+    int budget = full ? 3 : 1;
+    for (int job = 0; job < 3 && budget > 0; ++job)
+    {
+        const int which = (fitRoundRobin + job) % 3;
+        if (which == 0 && airDirty)
+        {
+            if (dr <= 0.0)
+                air.fitter.clear();
+            else
+            {
+                // Frequency where the attenuation reaches 24 dB (the accuracy limit); the shelves are
+                // placed below it so the f^2-like rise of the ISO curve is followed closely.
+                auto att = [&] (double f) { return models::airAbsorptionDbPerMetre (f, p.temperature, p.humidity) * dr; };
+                double f24 = 40000.0;
+                for (double f = 200.0; f < 40000.0; f *= 1.02)
+                    if (att (f) >= 24.0)
+                    {
+                        f24 = f;
+                        break;
+                    }
+                const double nyq = 0.45 * fs;
+                const double placement[5] = { 0.12, 0.30, 0.55, 0.85, 1.3 };
+                for (int i = 0; i < 5; ++i)
+                    air.fitter.setSectionFrequency (i, std::clamp (f24 * placement[i], 150.0, nyq));
+                for (int k = 0; k < nG; ++k)
+                {
+                    const double t = -att (grid[(size_t) k]);
+                    fitTarget[(size_t) k] = std::max (t, -40.0);
+                    fitWeight[(size_t) k] = t > -26.0 ? 1.0 : 0.1;
+                }
+                // Initial guess: each shelf takes the target step between neighbouring boundaries.
+                double prevT = 0.0;
+                for (int i = 0; i < 5; ++i)
+                {
+                    const double upper = i < 4 ? std::sqrt (air.fitter.sectionFrequency (i) * air.fitter.sectionFrequency (i + 1))
+                                               : 2.0 * air.fitter.sectionFrequency (i);
+                    const double tU = std::max (-att (upper), -40.0);
+                    air.fitter.setGain (i, tU - prevT);
+                    prevT = tU;
+                }
+                air.fitter.setBroadband (0.0);
+                air.fitter.fit (fitTarget.data(), fitWeight.data(), iterations);
+                air.refresh();
+            }
+            airFitDr = dr;
+            airFitOn = airOn;
+            airFitT = p.temperature;
+            airFitH = p.humidity;
+            air.setTargetFromFit (1.0);
+            --budget;
+        }
+        else if (which == 1 && obsDirty)
+        {
+            for (int k = 0; k < nG; ++k)
+            {
+                fitTarget[(size_t) k] = -models::maekawaAttenuationDb (grid[(size_t) k], p.obstacleSize);
+                fitWeight[(size_t) k] = 1.0;
+            }
+            obstruction.fitter.fit (fitTarget.data(), fitWeight.data(), iterations);
+            obsFitDelta = p.obstacleSize;
+            --budget;
+        }
+        else if (which == 2 && occDirty)
+        {
+            const auto& mat = models::material (p.material);
+            const double k = std::clamp ((double) p.thickness, 0.25, 4.0);
+            double fc = mat.fc > 0 ? mat.fc / k : 2000.0;
+            double f0 = 100.0;
+            if (mat.model == models::MaterialModel::doubleLeaf)
+                f0 = models::massAirMassResonance (mat.mass * k, mat.mass * k, mat.cavity);
+            else if (mat.model == models::MaterialModel::carBody)
+                f0 = 80.0;
+            occlusion.fitter.setSectionFrequency (5, std::clamp (fc, 60.0, 12000.0));
+            occlusion.fitter.setSectionFrequency (6, std::clamp (f0, 40.0, 1000.0));
+
+            double best = -1.0e9;
+            for (int i = 0; i < nG; ++i)
+            {
+                fitTarget[(size_t) i] = -models::transmissionLossDb (p.material, grid[(size_t) i], k, p.leak / 100.0);
+                best = std::max (best, fitTarget[(size_t) i]);
+            }
+            for (int i = 0; i < nG; ++i)
+                fitWeight[(size_t) i] = fitTarget[(size_t) i] > best - 45.0 ? 1.0 : 0.1;
+            occlusion.fitter.fit (fitTarget.data(), fitWeight.data(), iterations);
+            occFitMat = p.material;
+            occFitThick = p.thickness;
+            occFitLeak = p.leak;
+            occlusion.refresh();
+            --budget;
+        }
+    }
+    fitRoundRobin = (fitRoundRobin + 1) % 3;
+}
+
+//==============================================================================
+void SpatialEngine::controlTick (bool snap) noexcept
+{
+    if (snap)
+    {
+        for (Smooth* s : { &sLogDist, &sLogRec, &sRolloff, &sPan, &sTimePan, &sPsi, &sRho, &sMonoSafe, &sWidth, &sPropMix,
+                           &sMicB, &sAmtObs, &sAmtOcc, &sBassMix, &sOutput, &sRoomLevel, &sDecay })
+            s->snap();
+    }
+    else
+    {
+        for (Smooth* s : { &sLogDist, &sLogRec, &sRolloff, &sPan, &sTimePan, &sPsi, &sRho, &sMonoSafe, &sWidth, &sPropMix,
+                           &sMicB, &sAmtObs, &sAmtOcc, &sBassMix, &sOutput, &sRoomLevel, &sDecay })
+            s->tick (tickCoeff);
+    }
+
+    runFits (snap);
+    air.setTargetFromFit (1.0);
+    obstruction.setTargetFromFit (sAmtObs.cur);
+    occlusion.setTargetFromFit (sAmtOcc.cur);
+    if (snap)
+    {
+        air.snap();
+        obstruction.snap();
+        occlusion.snap();
+    }
+    else
+    {
+        air.tick (tickCoeff);
+        obstruction.tick (tickCoeff);
+        occlusion.tick (tickCoeff);
+    }
+
+    const int L = tickLength;
+    auto setRamp = [snap, L] (Ramp& r, double v)
+    {
+        if (snap)
+            r.snap (v);
+        else
+            r.set (v, L);
+    };
+
+    // --- Distance (inverse distance law with adjustable rolloff) + broadband filter gains.
+    const double r = std::exp (sLogDist.cur);
+    const double rr = std::exp (sLogRec.cur);
+    const double n = sRolloff.cur;
+    const double gDist = std::min (std::pow (rr / r, n), dbToGain (maxDistanceGainDb));
+    setRamp (rDirect, gDist * dbToGain (air.broadbandDb() + obstruction.broadbandDb()));
+
+    // --- Proximity-effect compensation: ratio of 1st-order gradient responses at the new and
+    // the recorded distance, H = (s + B c / r) / (s + B c / r_rec)  (bounded shelf).
+    const double B = sMicB.cur;
+    if (B > 0.0)
+    {
+        const double wd = B * kSpeedOfSound / r, wr = B * kSpeedOfSound / rr;
+        for (auto& f : prox)
+            f.setAnalog (1.0, wd, 1.0, wr, 2.0 * fs);
+    }
+    else
+        for (auto& f : prox)
+            f.setIdentity();
+
+    // --- Propagation delay (r/c) for Doppler.
+    setRamp (rProp, r / kSpeedOfSound * fs);
+    setRamp (rPropMix, sPropMix.cur);
+
+    // --- Speakers panner: hybrid amplitude + inter-channel time difference.
+    const double pan = sPan.cur, t = sTimePan.cur, psi = sPsi.cur;
+    const double pa = pan * (1.0 - t * (1.0 - std::abs (pan)));
+    double gl, gr, gc, gcr;
+    panLawGains (params.panLaw, pa, gl, gr);
+    panLawGains (params.panLaw, 0.0, gc, gcr);
+    const double GL = lerp (gl, gl / gc, psi), GR = lerp (gr, gr / gc, psi);
+    setRamp (rGL, GL);
+    setRamp (rGR, GR);
+    setRamp (rKs, std::min (GL, GR));
+    const double safe = sMonoSafe.cur;
+    setRamp (rSafe, safe);
+    const double tauMax = lerp (fullMaxTime, monoSafeMaxTime, safe) * fs;
+    const double tau = t * pan * tauMax;
+    setRamp (rTauL, std::max (0.0, tau));
+    setRamp (rTauR, std::max (0.0, -tau));
+    setRamp (rPsiIn, psi);
+
+    // --- Width (M/S). Stereo sources scale S; mono sources get a mono-compatible decorrelated S.
+    const double w = sWidth.cur;
+    const bool monoOut = numOutChannels == 1;
+    setRamp (rWS, monoOut ? 0.0 : w);
+    const double wd = monoOut ? 0.0 : (1.0 - psi) * decorrelationDepth * std::max (0.0, w - 1.0);
+    setRamp (rWD, wd);
+    setRamp (rBassMix, sBassMix.cur);
+
+    // --- Headphones: two virtual sources (A = M+S, B = M-S) around the azimuth.
+    const double rho = sRho.cur;
+    setRamp (rRho, rho);
+    if (rho > 0.0 || snap)
+    {
+        const double az = pan * kPi / 2.0;
+        const double spreadDeg = psi * w * 30.0 + (1.0 - psi) * std::max (0.0, w - 1.0) * 30.0;
+        const double spread = spreadDeg * kPi / 180.0;
+        double d[4], g[4], al[4];
+        for (int s = 0; s < 2; ++s)
+        {
+            const double a = std::clamp (az + (s == 0 ? -spread : spread), -kPi / 2, kPi / 2);
+            headphoneGeometry (a, r, d[s * 2], d[s * 2 + 1], g[s * 2], g[s * 2 + 1], al[s * 2], al[s * 2 + 1]);
+        }
+        const double dMin = std::min ({ d[0], d[1], d[2], d[3] });
+        const double wc = 2.0 * kSpeedOfSound / models::kHeadRadius; // Brown & Duda: corner at 2*w0
+        const double c = wc / std::tan (wc / (2.0 * fs));
+        for (int i = 0; i < 4; ++i)
+        {
+            setRamp (rHpDelay[(size_t) i], (d[i] - dMin) * fs);
+            setRamp (rHpGain[(size_t) i], g[i]);
+            hpFilter[i].setAnalog (al[i] / wc, 1.0, 1.0 / wc, 1.0, c);
+        }
+        setRamp (rHpG, lerp (gc * 0.5, 0.70710678, psi));
+    }
+
+    // --- Room (with crossfade on type changes).
+    const double roomLevelLin = dbToGain (sRoomLevel.cur);
+    if (! roomFading && pendingRoom >= 0 && pendingRoom != rooms[(size_t) activeRoom].type())
+    {
+        const int other = 1 - activeRoom;
+        rooms[(size_t) other].configure (pendingRoom, sDecay.cur);
+        rooms[(size_t) other].reset();
+        rooms[(size_t) other].setGeometry (r, pan * kPi / 2.0, rr, n, roomLevelLin, L);
+        rooms[(size_t) other].snapGeometry();
+        activeRoom = other;
+        pendingRoom = -1;
+        if (snap)
+            rRoomX.snap (other == 1 ? 1.0 : 0.0);
+        else
+            roomFading = true;
+    }
+    if (roomFading)
+    {
+        const double target = activeRoom == 1 ? 1.0 : 0.0;
+        const double stepPerTick = L / (roomFadeSeconds * fs);
+        double x = rRoomX.tgt;
+        x = target > x ? std::min (target, x + stepPerTick) : std::max (target, x - stepPerTick);
+        rRoomX.set (x, L);
+        if (x == target)
+            roomFading = false;
+    }
+    for (int i = 0; i < 2; ++i)
+    {
+        auto& room = rooms[(size_t) i];
+        if (i == activeRoom)
+            room.setDecay (sDecay.cur);
+        room.setGeometry (r, pan * kPi / 2.0, rr, n, roomLevelLin, L);
+        if (snap)
+            room.snapGeometry();
+    }
+
+    // --- Output: occlusion broadband + auto gain + output gain; mono-output normalisation.
+    if (params.autoGain && (tickCounter % 8 == 0 || snap))
+        updateAutoGainModel();
+    sAutoGain.target = params.autoGain ? autoGainTargetDb : 0.0;
+    if (snap)
+        sAutoGain.snap();
+    else
+        sAutoGain.tick (fastCoeff);
+    autoGainCurrentDb = sAutoGain.cur;
+    setRamp (rOut, dbToGain (occlusion.broadbandDb() + sAutoGain.cur + sOutput.cur));
+    setRamp (rMonoOut, 0.5 / lerp (gc, 1.0, psi));
+
+    decorActive = wd > 0.0 || rWD.cur != 0.0f;
+    ++tickCounter;
+}
+
+//==============================================================================
+// Model-based auto gain: predicted K-weighted (ITU-R BS.1770) loudness change for pink noise,
+// from the analytic responses of the current chain. Deterministic, no signal analysis.
+void SpatialEngine::updateAutoGainModel() noexcept
+{
+    const int nG = (int) grid.size();
+    const double r = std::exp (sLogDist.cur), rr = std::exp (sLogRec.cur);
+    const double gDist = std::min (std::pow (rr / r, sRolloff.cur), dbToGain (maxDistanceGainDb));
+    const double psi = sPsi.cur, rho = sRho.cur;
+    const bool monoOut = numOutChannels == 1;
+
+    const double GL = rGL.tgt, GR = rGR.tgt, ks = rKs.tgt;
+    const double sideEnergy = numInChannels == 2 ? stereoSideRatio : 0.0;
+    const double pIn = numInChannels == 2 ? 2.0 * (1.0 + stereoSideRatio) : 1.0;
+    const double wsT = rWS.tgt, wdT = rWD.tgt;
+    const double speakerPower = GL * GL + GR * GR + 2.0 * ks * ks * (wdT * wdT + psi * psi * sideEnergy * wsT * wsT);
+
+    double roomPower = 0.0;
+    for (int i = 0; i < 2; ++i)
+    {
+        const double wRoom = i == 1 ? rRoomX.tgt : 1.0 - rRoomX.tgt;
+        roomPower += wRoom * rooms[(size_t) i].predictedEnergy();
+    }
+
+    double sumOut = 0.0, sumIn = 0.0;
+    for (int k = 0; k < nG; ++k)
+    {
+        const double f = grid[(size_t) k];
+        const double w = kTwoPi * f / fs;
+        double hDb = gainToDb (gDist) + prox[0].magnitudeDb (w) + air.currentSectionsDb (k) + air.broadbandDb()
+                     + obstruction.currentSectionsDb (k) + obstruction.broadbandDb();
+        const double pDirect = std::pow (10.0, hDb / 10.0);
+
+        double panPower = speakerPower;
+        if (rho > 0.0)
+        {
+            double hp = 0.0;
+            for (int e = 0; e < 2; ++e)
+            {
+                const double a = rHpGain[(size_t) e].tgt * dbToGain (hpFilter[e].magnitudeDb (w));
+                const double b = rHpGain[(size_t) (2 + e)].tgt * dbToGain (hpFilter[2 + e].magnitudeDb (w));
+                hp += (a + b) * (a + b);
+            }
+            hp *= rHpG.tgt * rHpG.tgt;
+            panPower = lerp (speakerPower, hp, rho);
+        }
+        double out;
+        if (monoOut)
+            out = pDirect + roomPower * rMonoOut.tgt * rMonoOut.tgt * 2.0;
+        else
+            out = pDirect * panPower + roomPower;
+        out *= std::pow (10.0, (occlusion.currentSectionsDb (k) + occlusion.broadbandDb()) / 10.0);
+
+        const double kw = models::kWeightingPowerGain (f);
+        sumOut += kw * out;
+        sumIn += kw * (monoOut ? (numInChannels == 2 ? 2.0 * (1.0 + sideEnergy) * 0.5 : 1.0) : pIn);
+    }
+    const double range = std::clamp ((double) params.autoGainRange, 0.0, 36.0);
+    autoGainTargetDb = std::clamp (-10.0 * std::log10 (std::max (sumOut, 1.0e-20) / std::max (sumIn, 1.0e-20)), -range, range);
+}
+
+//==============================================================================
+void SpatialEngine::process (const float* const* in, int numIn, float* const* out, int numOut, int numSamples) noexcept
+{
+    if (numIn != numInChannels || numOut != numOutChannels)
+    {
+        numInChannels = std::clamp (numIn, 1, 2);
+        numOutChannels = std::clamp (numOut, 1, 2);
+        computeTargets();
+    }
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        if (tickPos == 0)
+        {
+            controlTick (needsSnap);
+            needsSnap = false;
+        }
+        const float xL = in[0][i];
+        const float xR = numIn > 1 ? in[1][i] : xL;
+        float oL, oR;
+        processSample (xL, xR, oL, oR);
+        if (numOut > 1)
+        {
+            out[0][i] = oL;
+            out[1][i] = oR;
+        }
+        else
+            out[0][i] = oL;
+        tickPos = (tickPos + 1) % tickLength;
+    }
+}
+
+void SpatialEngine::processSample (float xL, float xR, float& oL, float& oR) noexcept
+{
+    for (Ramp* r : { &rDirect, &rGL, &rGR, &rKs, &rTauL, &rTauR, &rProp, &rPropMix, &rWS, &rWD, &rBassMix, &rRho, &rHpG,
+                     &rOut, &rRoomX, &rMonoOut, &rSafe, &rPsiIn })
+        r->step();
+
+    // Input: mid/side of the source. Stereo sources keep S (scaled by "stereoness" psi).
+    float M = 0.5f * (xL + xR);
+    float S = 0.5f * (xL - xR) * rPsiIn.cur;
+
+    if (sMicB.cur > 0.0)
+    {
+        M = prox[0].process (M);
+        S = prox[1].process (S);
+    }
+
+    // Propagation delay / Doppler (crossfaded on toggle).
+    propLine[0].push (M);
+    propLine[1].push (S);
+    if (rPropMix.cur > 0.0f)
+    {
+        const float md = propLine[0].read (rProp.cur);
+        const float sd = propLine[1].read (rProp.cur);
+        M += rPropMix.cur * (md - M);
+        S += rPropMix.cur * (sd - S);
+    }
+
+    const float roomIn = M;
+
+    // Direct path: distance gain, air absorption, obstruction.
+    M *= rDirect.cur;
+    S *= rDirect.cur;
+    if (air.isActive())
+    {
+        M = air.process (0, M);
+        S = air.process (1, S);
+    }
+    if (obstruction.isActive())
+    {
+        M = obstruction.process (0, M);
+        S = obstruction.process (1, S);
+    }
+
+    // Width: stereo S scaling + mono-compatible decorrelated S; bass mono on S only.
+    float side = S * rWS.cur;
+    if (decorActive)
+    {
+        if (! decorRunning)
+        {
+            for (auto& a : decor)
+                a.reset();
+            decorRunning = true;
+        }
+        float dec = M;
+        for (auto& a : decor)
+            dec = a.process (dec);
+        side += dec * rWD.cur;
+    }
+    else
+        decorRunning = false;
+
+    if (rBassMix.cur > 0.0f || sBassMix.target > 0.0)
+    {
+        if (! bassRunning)
+        {
+            bassHp1.reset();
+            bassHp2.reset();
+            bassRunning = true;
+        }
+        const float hp = bassHp2.processHigh (bassHp1.processHigh (side));
+        side += rBassMix.cur * (hp - side);
+    }
+    else
+        bassRunning = false;
+
+    // Speakers: amplitude + time panning (time applied to M only, S stays antisymmetric).
+    const float lp = timeXover.processLow (M);
+    timeLineM[0].push (M);
+    timeLineLP[0].push (lp);
+    auto timeChannel = [&] (float tauSamples)
+    {
+        if (tauSamples <= 0.0f)
+            return M;
+        const float safe = rSafe.cur;
+        const float bandLimited = M - lp + timeLineLP[0].read (tauSamples);
+        const float full = timeLineM[0].read (tauSamples);
+        return safe * bandLimited + (1.0f - safe) * full;
+    };
+    const float chL = timeChannel (rTauL.cur);
+    const float chR = timeChannel (rTauR.cur);
+    float L = rGL.cur * chL + rKs.cur * side;
+    float R = rGR.cur * chR - rKs.cur * side;
+
+    // Headphones: spherical-head binaural rendering of the two virtual sources.
+    const float A = M + side, Bv = M - side;
+    hpLine[0].push (A);
+    hpLine[1].push (Bv);
+    if (rRho.cur > 0.0f)
+    {
+        float ear[2] = { 0, 0 };
+        for (int s = 0; s < 2; ++s)
+            for (int e = 0; e < 2; ++e)
+            {
+                const int idx = s * 2 + e;
+                auto& dr = rHpDelay[(size_t) idx];
+                auto& gr = rHpGain[(size_t) idx];
+                dr.step();
+                gr.step();
+                ear[e] += hpFilter[idx].process (hpLine[s].read (dr.cur)) * gr.cur;
+            }
+        const float g = rHpG.cur;
+        L += rRho.cur * (ear[0] * g - L);
+        R += rRho.cur * (ear[1] * g - R);
+    }
+
+    // Room (source room: fed before distance attenuation, level set by the DRR model).
+    const float x1 = rRoomX.cur;
+    for (int i = 0; i < 2; ++i)
+    {
+        const float wRoom = i == 1 ? x1 : 1.0f - x1;
+        auto& room = rooms[(size_t) i];
+        if (wRoom <= 0.0f || room.type() == roomOff)
+            continue;
+        float rl, rrOut;
+        room.process (roomIn, rl, rrOut);
+        L += wRoom * rl;
+        R += wRoom * rrOut;
+    }
+
+    if (numOutChannels == 1)
+    {
+        L = (L + R) * rMonoOut.cur;
+        R = L;
+    }
+
+    // Occlusion: transmission through the partition (direct + source-room reverb).
+    if (occlusion.isActive())
+    {
+        L = occlusion.process (0, L);
+        R = numOutChannels == 1 ? L : occlusion.process (1, R);
+    }
+
+    oL = L * rOut.cur;
+    oR = R * rOut.cur;
+}
+
+//==============================================================================
+double SpatialEngine::airFilterDb (double freq) const noexcept
+{
+    const auto& g = air.fitter.gridFrequencies();
+    int best = 0;
+    for (int k = 0; k < (int) g.size(); ++k)
+        if (std::abs (std::log (g[(size_t) k] / freq)) < std::abs (std::log (g[(size_t) best] / freq)))
+            best = k;
+    return air.currentSectionsDb (best) + air.broadbandDb();
+}
+
+double SpatialEngine::obstacleFilterDb (double freq) const noexcept
+{
+    const auto& g = obstruction.fitter.gridFrequencies();
+    int best = 0;
+    for (int k = 0; k < (int) g.size(); ++k)
+        if (std::abs (std::log (g[(size_t) k] / freq)) < std::abs (std::log (g[(size_t) best] / freq)))
+            best = k;
+    return obstruction.currentSectionsDb (best) + obstruction.broadbandDb();
+}
+
+double SpatialEngine::occlusionFilterDb (double freq) const noexcept
+{
+    const auto& g = occlusion.fitter.gridFrequencies();
+    int best = 0;
+    for (int k = 0; k < (int) g.size(); ++k)
+        if (std::abs (std::log (g[(size_t) k] / freq)) < std::abs (std::log (g[(size_t) best] / freq)))
+            best = k;
+    return occlusion.currentSectionsDb (best) + occlusion.broadbandDb();
+}
+
+} // namespace amb

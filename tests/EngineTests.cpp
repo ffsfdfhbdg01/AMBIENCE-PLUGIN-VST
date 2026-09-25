@@ -1,0 +1,523 @@
+// Acceptance tests for the Ambience DSP engine (PROMPT.md section 11).
+// Self-contained: no external test framework. Exit code != 0 on failure.
+#include <chrono>
+#include <cstdio>
+#include <functional>
+#include <string>
+
+#include "../Source/dsp/AcousticModels.h"
+#include "../Source/dsp/SpatialEngine.h"
+#include "../tools/Render.h"
+#include "../tools/TestSignals.h"
+
+using namespace amb;
+using namespace amb::tools;
+
+namespace
+{
+int failures = 0, checks = 0;
+
+void check (bool ok, const std::string& what)
+{
+    ++checks;
+    if (! ok)
+    {
+        ++failures;
+        std::printf ("    FAIL: %s\n", what.c_str());
+    }
+}
+
+void near (double actual, double expected, double tol, const std::string& what)
+{
+    char buf[256];
+    std::snprintf (buf, sizeof (buf), "%s: got %.4f, expected %.4f +- %.4f", what.c_str(), actual, expected, tol);
+    check (std::abs (actual - expected) <= tol, buf);
+}
+
+struct TestCase
+{
+    const char* name;
+    std::function<void()> fn;
+};
+
+double maxAbsDiff (const std::vector<float>& a, const std::vector<float>& b, int from = 0)
+{
+    double m = 0;
+    for (size_t i = (size_t) from; i < a.size(); ++i)
+        m = std::max (m, (double) std::abs (a[i] - b[i]));
+    return m;
+}
+
+double peak (const std::vector<float>& a)
+{
+    double m = 0;
+    for (float v : a)
+        m = std::max (m, (double) std::abs (v));
+    return m;
+}
+
+EngineParams dryParams()
+{
+    EngineParams p;
+    p.airAbsorption = false;
+    return p;
+}
+
+double measureItdMs (const std::vector<float>& l, const std::vector<float>& r, double fs, int from)
+{
+    // Cross-correlation lag of R relative to L (positive: R later), +-1.5 ms search.
+    const int maxLag = (int) (0.0015 * fs);
+    double best = -1e30;
+    int bestLag = 0;
+    const int n = (int) l.size();
+    for (int lag = -maxLag; lag <= maxLag; ++lag)
+    {
+        double s = 0;
+        for (int i = from + maxLag; i < n - maxLag; ++i)
+            s += (double) l[(size_t) i] * r[(size_t) (i + lag)];
+        if (s > best)
+        {
+            best = s;
+            bestLag = lag;
+        }
+    }
+    // Parabolic refinement.
+    auto corr = [&] (int lag)
+    {
+        double s = 0;
+        for (int i = from + maxLag; i < n - maxLag; ++i)
+            s += (double) l[(size_t) i] * r[(size_t) (i + lag)];
+        return s;
+    };
+    const double ym = corr (bestLag - 1), y0 = corr (bestLag), yp = corr (bestLag + 1);
+    const double frac = 0.5 * (ym - yp) / (ym - 2 * y0 + yp);
+    return (bestLag + frac) / fs * 1000.0;
+}
+
+std::vector<float> lowpassed (const std::vector<float>& x, double fs, double fc)
+{
+    Biquad a, b;
+    a.set (designBiquadHz (BiquadType::lowPass, fs, fc, 0.707, 0));
+    b.set (designBiquadHz (BiquadType::lowPass, fs, fc, 0.707, 0));
+    std::vector<float> y (x.size());
+    for (size_t i = 0; i < x.size(); ++i)
+        y[i] = b.process (a.process (x[i]));
+    return y;
+}
+
+} // namespace
+
+int main()
+{
+    const double fs = 48000.0;
+    std::vector<TestCase> tests;
+
+    //--------------------------------------------------------------------------
+    tests.push_back ({ "1. Distance: doubling = -6.0 +- 0.1 dB", [&]
+    {
+        const auto x = sine (1000, fs, 48000);
+        for (double r0 : { 1.0, 3.0, 20.0 })
+        {
+            auto p = dryParams();
+            p.distance = (float) r0;
+            const auto a = render (p, { x }, 1);
+            p.distance = (float) (2 * r0);
+            const auto b = render (p, { x }, 1);
+            near (gainToDb (rms (b[0].data() + 4800, 40000) / rms (a[0].data() + 4800, 40000)), -6.0206, 0.1,
+                  "doubling from " + std::to_string (r0) + " m");
+        }
+        auto p = dryParams();
+        p.distance = 0.1f;
+        p.recDistance = 10.0f;
+        const auto c = render (p, { x }, 1);
+        check (gainToDb (rms (c[0].data() + 4800, 40000) / rms (x.data() + 4800, 40000)) <= 24.01, "near gain clamped to +24 dB");
+    } });
+
+    tests.push_back ({ "2. Air absorption: ISO 9613-1 reference values", [&]
+    {
+        // ISO 9613-2 table (10 degC, 70 % RH): 3.7 / 9.7 / 32.8 / 117 dB/km at exact mid-band freqs.
+        const double f[4] = { 1000.0, 1995.26, 3981.07, 7943.28 };
+        const double ref[4] = { 3.7, 9.7, 32.8, 117.0 };
+        for (int i = 0; i < 4; ++i)
+        {
+            const double a = models::airAbsorptionDbPerMetre (f[i], 10.0, 70.0) * 1000.0;
+            near (a, ref[i], ref[i] * 0.02, "alpha(" + std::to_string ((int) f[i]) + " Hz)");
+        }
+        // Realised filter: <= 1 dB error wherever the attenuation is < 24 dB.
+        for (double sr : { 44100.0, 48000.0, 96000.0, 192000.0 })
+            for (double dist : { 10.0, 50.0, 150.0, 400.0, 1000.0 })
+            {
+                SpatialEngine e;
+                e.prepare (sr, 512);
+                EngineParams p;
+                p.distance = (float) dist;
+                e.setParams (p);
+                std::vector<float> buf (64, 0.0f);
+                const float* ip[1] = { buf.data() };
+                float* op[1] = { buf.data() };
+                e.process (ip, 1, op, 1, 64);
+                double worst = 0;
+                for (double fq : thirdOctaveGrid (sr))
+                {
+                    const double target = -models::airAbsorptionDbPerMetre (fq, 20.0, 50.0) * (dist - 1.0);
+                    if (target > -24.0)
+                        worst = std::max (worst, std::abs (e.airFilterDb (fq) - target));
+                }
+                check (worst <= 1.0, "air fit error " + std::to_string (worst) + " dB at " + std::to_string ((int) dist) + " m, fs "
+                                         + std::to_string ((int) sr));
+            }
+    } });
+
+    tests.push_back ({ "3. Headphones, Pan -100: ITD 0.66 ms, ILD", [&]
+    {
+        auto p = dryParams();
+        p.renderMode = 1;
+        p.pan = -100;
+        const auto noise = lowpassed (pinkNoise (48000), fs, 1500);
+        const auto out = render (p, { noise }, 2);
+        const double itd = measureItdMs (lowpassed (out[0], fs, 1500), lowpassed (out[1], fs, 1500), fs, 2000);
+        near (itd, 0.656, 0.02, "ITD (ms, right ear later)");
+
+        const auto s200 = render (p, { sine (200, fs, 48000) }, 2);
+        const double ild200 = gainToDb (rms (s200[0].data() + 4800, 40000) / rms (s200[1].data() + 4800, 40000));
+        near (ild200, 0.0, 1.5, "ILD at 200 Hz");
+        for (double f : { 4000.0, 8000.0 })
+        {
+            const auto s = render (p, { sine (f, fs, 48000) }, 2);
+            const double ild = gainToDb (rms (s[0].data() + 4800, 40000) / rms (s[1].data() + 4800, 40000));
+            check (ild >= 12.0, "ILD at " + std::to_string ((int) f) + " Hz >= 12 dB (got " + std::to_string (ild) + ")");
+        }
+    } });
+
+    tests.push_back ({ "4. Pan law -3 dB: constant power", [&]
+    {
+        const auto x = sine (1000, fs, 24000);
+        const double inP = rms (x.data() + 4800, 19000);
+        for (int pan = -100; pan <= 100; pan += 10)
+        {
+            auto p = dryParams();
+            p.timePan = 0;
+            p.pan = (float) pan;
+            const auto o = render (p, { x }, 2);
+            const double l = rms (o[0].data() + 4800, 19000), r = rms (o[1].data() + 4800, 19000);
+            near (10.0 * std::log10 ((l * l + r * r) / (inP * inP)), 0.0, 0.1, "L^2+R^2 at pan " + std::to_string (pan));
+        }
+    } });
+
+    tests.push_back ({ "5. Mono-safe: mono sum deviation <= 3 dB per 1/3 octave", [&]
+    {
+        const int n = 48000 * 3;
+        const auto x = pinkNoise (n);
+        const auto centres = thirdOctaveGrid (fs, 20.0, 20000.0);
+        for (int pan : { -100, -70, -40, -15, 10, 30, 60, 90 })
+            for (float tp : { 50.0f, 100.0f })
+                for (float w : { 100.0f, 200.0f })
+                {
+                    auto p = dryParams();
+                    p.pan = (float) pan;
+                    p.width = w;
+                    p.timePan = tp;
+                    const auto a = render (p, { x }, 2);
+                    p.timePan = 0;
+                    const auto b = render (p, { x }, 2);
+                    std::vector<float> sa ((size_t) n), sb ((size_t) n);
+                    for (int i = 0; i < n; ++i)
+                    {
+                        sa[(size_t) i] = a[0][(size_t) i] + a[1][(size_t) i];
+                        sb[(size_t) i] = b[0][(size_t) i] + b[1][(size_t) i];
+                    }
+                    const auto ba = thirdOctaveBands (powerSpectrum (sa.data() + 4800, n - 4800, 16384), fs, 16384, centres);
+                    const auto bb = thirdOctaveBands (powerSpectrum (sb.data() + 4800, n - 4800, 16384), fs, 16384, centres);
+                    double worst = 0;
+                    for (size_t k = 0; k < ba.size(); ++k)
+                        if (bb[k] > 0 && ba[k] > 0)
+                            worst = std::max (worst, std::abs (10.0 * std::log10 (ba[k] / bb[k])));
+                    check (worst <= 3.0, "pan " + std::to_string (pan) + " time " + std::to_string ((int) tp) + " width "
+                                             + std::to_string ((int) w) + ": " + std::to_string (worst) + " dB");
+                }
+    } });
+
+    tests.push_back ({ "6. Width: L+R independent of Width; Width 0 -> L = R", [&]
+    {
+        const int n = 24000;
+        const auto xl = pinkNoise (n, 1), xr = pinkNoise (n, 2);
+        for (int stereo = 0; stereo < 2; ++stereo)
+            for (int pan : { -100, -50, 0, 35, 100 })
+            {
+                auto p = dryParams();
+                p.pan = (float) pan;
+                std::vector<std::vector<float>> in = stereo ? std::vector<std::vector<float>> { xl, xr } : std::vector<std::vector<float>> { xl };
+                p.width = 100;
+                const auto ref = render (p, in, 2);
+                for (float w : { 0.0f, 150.0f, 200.0f })
+                {
+                    p.width = w;
+                    const auto o = render (p, in, 2);
+                    double m = 0;
+                    for (int i = 4800; i < n; ++i)
+                        m = std::max (m, (double) std::abs ((o[0][(size_t) i] + o[1][(size_t) i]) - (ref[0][(size_t) i] + ref[1][(size_t) i])));
+                    check (gainToDb (m) <= -100.0, "mono sum change " + std::to_string (gainToDb (m)) + " dB (stereo " + std::to_string (stereo)
+                                                       + ", pan " + std::to_string (pan) + ", width " + std::to_string ((int) w) + ")");
+                }
+            }
+        auto p = dryParams();
+        p.width = 0;
+        const auto o = render (p, { xl, xr }, 2);
+        check (maxAbsDiff (o[0], o[1]) < 1.0e-6, "width 0 at pan 0 gives L == R");
+    } });
+
+    tests.push_back ({ "7. Occlusion: mass-law slope, leak, amount 0 null", [&]
+    {
+        SpatialEngine e;
+        e.prepare (fs, 256);
+        EngineParams p = dryParams();
+        p.obstacle = 2;
+        p.material = 1; // glass 6 mm: mass-law region well below fc/2 = 1 kHz
+        e.setParams (p);
+        std::vector<float> buf (64, 0.0f);
+        const float* ip[1] = { buf.data() };
+        float* op[1] = { buf.data() };
+        e.process (ip, 1, op, 1, 64);
+        const double slope = (e.occlusionFilterDb (200.0) - e.occlusionFilterDb (800.0)) / 2.0;
+        near (slope, 6.0, 1.5, "glass R(f) slope dB/octave (200-800 Hz)");
+        // Target vs realised filter in the region that matters (within 45 dB of the minimum loss).
+        for (int m = 0; m < models::numMaterials; ++m)
+        {
+            p.material = m;
+            SpatialEngine em;
+            em.prepare (fs, 256);
+            em.setParams (p);
+            em.process (ip, 1, op, 1, 64);
+            double worst = 0, best = -1e9;
+            for (double f : thirdOctaveGrid (fs, 50, 10000))
+                best = std::max (best, -models::transmissionLossDb (m, f, 1.0, 0.0));
+            for (double f : thirdOctaveGrid (fs, 50, 10000))
+            {
+                const double t = -models::transmissionLossDb (m, f, 1.0, 0.0);
+                if (t > best - 30.0)
+                    worst = std::max (worst, std::abs (em.occlusionFilterDb (f) - t));
+            }
+            check (worst <= 3.0, std::string ("material fit ") + models::material (m).name + ": " + std::to_string (worst) + " dB");
+        }
+
+        p.material = 3;
+        p.leak = 0;
+        SpatialEngine e1;
+        e1.prepare (fs, 256);
+        e1.setParams (p);
+        e1.process (ip, 1, op, 1, 64);
+        p.leak = 50;
+        SpatialEngine e2;
+        e2.prepare (fs, 256);
+        e2.setParams (p);
+        e2.process (ip, 1, op, 1, 64);
+        check (e2.occlusionFilterDb (4000) > e1.occlusionFilterDb (4000) + 3.0, "leak raises high frequencies");
+
+        // Amount 0 % == no obstacle (null test).
+        const auto x = pinkNoise (24000);
+        auto q = EngineParams();
+        const auto ref = render (q, { x }, 2);
+        q.obstacle = 2;
+        q.amount = 0;
+        const auto o = render (q, { x }, 2);
+        check (gainToDb (std::max (maxAbsDiff (o[0], ref[0]), maxAbsDiff (o[1], ref[1]))) <= -120.0, "amount 0 null test");
+    } });
+
+    tests.push_back ({ "8. Obstruction follows Maekawa (+-1.5 dB, 125 Hz - 8 kHz)", [&]
+    {
+        for (float delta : { 0.0f, 0.3f, 1.0f, 3.0f })
+        {
+            SpatialEngine e;
+            e.prepare (fs, 256);
+            EngineParams p = dryParams();
+            p.obstacle = 1;
+            p.obstacleSize = delta;
+            e.setParams (p);
+            std::vector<float> buf (64, 0.0f);
+            const float* ip[1] = { buf.data() };
+            float* op[1] = { buf.data() };
+            e.process (ip, 1, op, 1, 64);
+            double worst = 0;
+            for (double f : thirdOctaveGrid (fs, 125, 8000))
+                worst = std::max (worst, std::abs (e.obstacleFilterDb (f) + models::maekawaAttenuationDb (f, delta)));
+            check (worst <= 1.5, "delta " + std::to_string (delta) + " m: error " + std::to_string (worst) + " dB");
+        }
+    } });
+
+    tests.push_back ({ "9. Automation: no discontinuities, NaN or Inf", [&]
+    {
+        const int n = 48000 * 2;
+        const auto x = sine (1000, fs, n, 0.5f);
+        std::vector<std::pair<int, EngineParams>> autom;
+        for (int b = 0; b < n; b += 256)
+        {
+            EngineParams p;
+            const double t = (double) b / n;
+            p.pan = (float) (100.0 * std::sin (kTwoPi * 3.0 * t));
+            p.distance = (float) std::pow (10.0, 2.0 * (0.5 + 0.5 * std::sin (kTwoPi * 2.0 * t)));
+            p.obstacle = 2;
+            p.amount = (float) (100.0 * (0.5 + 0.5 * std::sin (kTwoPi * 4.0 * t)));
+            p.material = (b / 12000) % models::numMaterials;
+            p.leak = (float) (50.0 * t);
+            p.autoGain = true;
+            p.propDelay = (b / 30000) % 2 == 1;
+            autom.push_back ({ b, p });
+        }
+        const auto out = render (autom[0].second, { x }, 2, fs, 256, &autom);
+        bool finite = true;
+        double maxStep = 0, maxAmp = 0;
+        for (int c = 0; c < 2; ++c)
+            for (int i = 1; i < n; ++i)
+            {
+                const float v = out[(size_t) c][(size_t) i];
+                if (! std::isfinite (v))
+                    finite = false;
+                maxAmp = std::max (maxAmp, (double) std::abs (v));
+                maxStep = std::max (maxStep, (double) std::abs (v - out[(size_t) c][(size_t) (i - 1)]));
+            }
+        check (finite, "output finite");
+        // A 1 kHz sine at fs 48 kHz changes at most 2*pi*1000/48000 = 0.131 x amplitude per sample.
+        check (maxStep <= 0.2 * std::max (maxAmp, 1.0e-9) + 1.0e-6,
+               "max step " + std::to_string (maxStep) + " vs peak " + std::to_string (maxAmp));
+    } });
+
+    tests.push_back ({ "10. Sample-rate independence (+-0.5 dB to 16 kHz)", [&]
+    {
+        auto responses = [] (double sr)
+        {
+            SpatialEngine e;
+            e.prepare (sr, 256);
+            EngineParams p;
+            p.distance = 120;
+            p.obstacle = 2;
+            p.material = 4;
+            e.setParams (p);
+            std::vector<float> buf (64, 0.0f);
+            const float* ip[1] = { buf.data() };
+            float* op[1] = { buf.data() };
+            e.process (ip, 1, op, 1, 64);
+            std::vector<double> v;
+            for (double f : thirdOctaveGrid (48000.0, 25, 16000))
+                v.push_back (e.airFilterDb (f) + e.occlusionFilterDb (f));
+            return v;
+        };
+        const auto ref = responses (48000.0);
+        for (double sr : { 44100.0, 96000.0, 192000.0 })
+        {
+            const auto v = responses (sr);
+            const auto g = thirdOctaveGrid (48000.0, 25, 16000);
+            double worst = 0;
+            for (size_t k = 0; k < v.size(); ++k)
+                if (ref[k] > -60.0) // audible region
+                    worst = std::max (worst, std::abs (v[k] - ref[k]));
+            check (worst <= 0.5, "fs " + std::to_string ((int) sr) + ": max deviation " + std::to_string (worst) + " dB");
+        }
+    } });
+
+    tests.push_back ({ "11. Block-size independence and determinism", [&]
+    {
+        const int n = 48000;
+        const auto xl = pinkNoise (n, 5), xr = pinkNoise (n, 6);
+        EngineParams p;
+        p.distance = 12;
+        p.pan = -40;
+        p.room = 4;
+        p.obstacle = 2;
+        p.material = 4;
+        p.leak = 20;
+        p.width = 160;
+        p.micPattern = 1;
+        p.recDistance = 0.4f;
+        p.autoGain = true;
+        p.bassMono = 3;
+        const auto a = render (p, { xl, xr }, 2, fs, 32);
+        const auto b = render (p, { xl, xr }, 2, fs, 1024);
+        const auto c = render (p, { xl, xr }, 2, fs, 97);
+        const auto d = render (p, { xl, xr }, 2, fs, 1024);
+        const double diff = std::max ({ maxAbsDiff (a[0], b[0]), maxAbsDiff (a[1], b[1]), maxAbsDiff (a[0], c[0]), maxAbsDiff (a[1], c[1]) });
+        check (diff == 0.0 || gainToDb (diff) <= -120.0, "32 vs 1024 vs 97 sample blocks: " + std::to_string (gainToDb (diff)) + " dBFS");
+        check (maxAbsDiff (b[0], d[0]) == 0.0 && maxAbsDiff (b[1], d[1]) == 0.0, "identical re-render");
+    } });
+
+    tests.push_back ({ "12. Factory presets render finite, non-silent audio", [&]
+    {
+        const auto x = pinkNoise (48000);
+        for (const auto& preset : factoryPresets())
+        {
+            const auto p = paramsForPreset (preset);
+            const auto o = render (p, { x, x }, 2);
+            bool finite = true;
+            for (auto& ch : o)
+                for (float v : ch)
+                    finite = finite && std::isfinite (v);
+            check (finite, std::string (preset.name) + ": finite");
+            check (rms (o[0].data() + 24000, 24000) > 1.0e-5, std::string (preset.name) + ": not silent");
+            check (! p.autoGain && p.output == 0.0f, std::string (preset.name) + ": auto gain off, output 0 dB");
+        }
+    } });
+
+    tests.push_back ({ "13. Neutral defaults and zero latency", [&]
+    {
+        const auto xl = pinkNoise (24000, 11), xr = pinkNoise (24000, 12);
+        EngineParams p;
+        const auto st = render (p, { xl, xr }, 2);
+        check (gainToDb (std::max (maxAbsDiff (st[0], xl), maxAbsDiff (st[1], xr))) <= -120.0, "stereo->stereo null test");
+        const auto mm = render (p, { xl }, 1);
+        check (gainToDb (maxAbsDiff (mm[0], xl)) <= -120.0, "mono->mono null test");
+        const auto ms = render (p, { xl }, 2);
+        std::vector<float> half (xl.size());
+        for (size_t i = 0; i < xl.size(); ++i)
+            half[i] = xl[i] * 0.70710678f;
+        check (gainToDb (std::max (maxAbsDiff (ms[0], half), maxAbsDiff (ms[1], half))) <= -120.0, "mono->stereo = -3 dB pan law");
+        SpatialEngine e;
+        e.prepare (fs, 256);
+        check (e.getLatencySamples() == 0, "latency 0");
+    } });
+
+    tests.push_back ({ "14. Auto gain: off by default, compensates loudness when on", [&]
+    {
+        const auto x = pinkNoise (48000 * 2);
+        EngineParams p;
+        p.distance = 4;
+        p.obstacle = 2;
+        p.material = 0;
+        const auto off = render (p, { x }, 2);
+        p.autoGain = true;
+        const auto on = render (p, { x }, 2);
+        const double inR = rms (x.data() + 48000, 48000);
+        const double offR = std::sqrt (0.5 * (std::pow (rms (off[0].data() + 48000, 48000), 2) + std::pow (rms (off[1].data() + 48000, 48000), 2)));
+        const double onR = std::sqrt (0.5 * (std::pow (rms (on[0].data() + 48000, 48000), 2) + std::pow (rms (on[1].data() + 48000, 48000), 2)));
+        check (gainToDb (offR * std::sqrt (2.0) / inR) < -12.0, "without auto gain the distance+curtain loss is large");
+        // Pink-noise loudness is restored to within a few dB (K-weighting vs plain RMS differ slightly).
+        near (gainToDb (onR * std::sqrt (2.0) / inR), 0.0, 3.0, "auto gain restores level (RMS proxy)");
+    } });
+
+    tests.push_back ({ "15. CPU benchmark (informative)", [&]
+    {
+        const int n = 48000 * 10;
+        const auto x = pinkNoise (n);
+        for (int roomOn = 0; roomOn < 2; ++roomOn)
+        {
+            EngineParams p;
+            p.distance = 10;
+            p.pan = 30;
+            p.room = roomOn ? 3 : 0;
+            const auto t0 = std::chrono::steady_clock::now();
+            const auto o = render (p, { x, x }, 2, fs, 512);
+            const auto t1 = std::chrono::steady_clock::now();
+            const double secs = std::chrono::duration<double> (t1 - t0).count();
+            std::printf ("    %s: %.3f %% of one core (48 kHz stereo)\n", roomOn ? "Room Medium" : "Room Off", 100.0 * secs / 10.0);
+            check (o[0].size() == (size_t) n, "rendered");
+        }
+    } });
+
+    for (auto& t : tests)
+    {
+        const int before = failures;
+        std::printf ("%s\n", t.name);
+        t.fn();
+        std::printf ("  -> %s\n", failures == before ? "ok" : "FAILED");
+    }
+    std::printf ("\n%d checks, %d failures\n", checks, failures);
+    return failures == 0 ? 0 : 1;
+}
