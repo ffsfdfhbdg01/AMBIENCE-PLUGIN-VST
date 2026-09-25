@@ -4,6 +4,12 @@
 
 namespace
 {
+// juce::String (float, 0) would print full precision, so zero decimals are rounded explicitly.
+juce::String fixed (float v, int decimals)
+{
+    return decimals <= 0 ? juce::String (juce::roundToInt (v)) : juce::String (v, decimals);
+}
+
 juce::String formatValue (const amb::ParamSpec& s, float v)
 {
     const juce::String id (s.id);
@@ -11,10 +17,10 @@ juce::String formatValue (const amb::ParamSpec& s, float v)
     {
         if (std::abs (v) < 0.5f)
             return "C";
-        return (v < 0 ? "L" : "R") + juce::String (std::abs (v), 0);
+        return (v < 0 ? "L" : "R") + fixed (std::abs (v), 0);
     }
     if (id == amb::pid::distance || id == amb::pid::recDistance)
-        return juce::String (v, v < 10.0f ? 2 : (v < 100.0f ? 1 : 0)) + " m";
+        return fixed (v, v < 10.0f ? 2 : (v < 100.0f ? 1 : 0)) + " m";
     if (id == amb::pid::obstacleSize)
         return juce::String (v, 2) + " m";
     if (id == amb::pid::thickness)
@@ -24,8 +30,8 @@ juce::String formatValue (const amb::ParamSpec& s, float v)
     juce::String unit (s.unit);
     const int decimals = (unit == "dB" || unit == "dB/dd") ? 1 : 0;
     if (unit == "dB" && v > 0.05f)
-        return "+" + juce::String (v, decimals) + " dB";
-    return juce::String (v, decimals) + (unit.isEmpty() ? "" : " " + unit);
+        return "+" + fixed (v, decimals) + " dB";
+    return fixed (v, decimals) + (unit.isEmpty() ? "" : " " + unit);
 }
 } // namespace
 
