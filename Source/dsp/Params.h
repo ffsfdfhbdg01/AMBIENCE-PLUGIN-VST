@@ -67,6 +67,7 @@ namespace pid
     inline constexpr const char* output = "output";
     inline constexpr const char* monoDepth = "monoDepth";
     inline constexpr const char* eqAmbience = "eqAmbience";
+    inline constexpr const char* monoToStereo = "monoToStereo";
 } // namespace pid
 
 inline const std::vector<ParamSpec>& paramSpecs()
@@ -108,6 +109,7 @@ inline const std::vector<ParamSpec>& paramSpecs()
         { pid::output, "Output", K::floating, -24, 24, 0, 0.1f, S::linear, "dB", {} },
         { pid::monoDepth, "Mono Depth", K::toggle, 0, 1, 0, 1, S::linear, "", {} },
         { pid::eqAmbience, "Equalized Ambience", K::toggle, 0, 1, 1, 1, S::linear, "", {} },
+        { pid::monoToStereo, "Mono to Stereo", K::toggle, 0, 1, 0, 1, S::linear, "", {} },
     };
     return specs;
 }
@@ -151,6 +153,7 @@ struct EngineParams
     float output = 0;
     bool monoDepth = false; // mono output: depth cues only (distance, air, room, obstacle)
     bool eqAmbience = true; // automatic distance/position EQ (air absorption, proximity, position shading)
+    bool monoToStereo = false; // mono signal in -> mono-compatible stereo out (amount follows Width)
 
     // Sets a value by parameter ID (plain units). Unknown IDs are ignored.
     void set (const std::string& id, float v)
@@ -187,6 +190,7 @@ struct EngineParams
         else if (id == pid::output) output = v;
         else if (id == pid::monoDepth) monoDepth = b();
         else if (id == pid::eqAmbience) eqAmbience = b();
+        else if (id == pid::monoToStereo) monoToStereo = b();
     }
 };
 
@@ -225,6 +229,9 @@ inline const std::vector<FactoryPreset>& factoryPresets()
         { "Mono Dialogue - Medium Shot", { { pid::monoDepth, 1 }, { pid::inputMode, 1 }, { pid::recDistance, 0.5f }, { pid::distance, 3 }, { pid::room, 8 }, { pid::roomLevel, -3 } } },
         { "Mono Dialogue - Wide Shot", { { pid::monoDepth, 1 }, { pid::inputMode, 1 }, { pid::recDistance, 0.5f }, { pid::distance, 9 }, { pid::room, 7 }, { pid::roomLevel, -1 } } },
         { "Mono Dialogue - Next Room", { { pid::monoDepth, 1 }, { pid::inputMode, 1 }, { pid::recDistance, 0.5f }, { pid::distance, 4 }, { pid::room, 8 }, { pid::obstacle, 2 }, { pid::material, 4 } } },
+        { "Mono to Stereo", { { pid::monoToStereo, 1 } } },
+        { "Mono to Stereo - Wide", { { pid::monoToStereo, 1 }, { pid::width, 160 }, { pid::bassMono, 3 } } },
+        { "Mono to Stereo - Dialogue in Room", { { pid::monoToStereo, 1 }, { pid::recDistance, 0.5f }, { pid::distance, 3 }, { pid::room, 7 }, { pid::roomLevel, -4 } } },
     };
     return presets;
 }

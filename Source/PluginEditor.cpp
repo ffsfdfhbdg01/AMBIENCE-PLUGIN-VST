@@ -358,6 +358,11 @@ AmbienceEditor::AmbienceEditor (AmbienceProcessor& p)
                          "removal of close-mic proximity bass and a gentle high-frequency shading on the side away from the source. "
                          "Off: only level, timing and room change; the tone stays as recorded.");
     eqAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, pid::eqAmbience, eqToggle);
+    content.addAndMakeVisible (monoToStereoToggle);
+    monoToStereoToggle.setTooltip ("Mono to Stereo: a mono signal (mono track, Input = Mono, or identical channels on a stereo track) "
+                                   "becomes a natural stereo image. Mono-compatible: L + R stays the original sound, both channels keep "
+                                   "the same tone and level, bass stays centred. The amount follows Width. True stereo input is not changed.");
+    monoToStereoAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, pid::monoToStereo, monoToStereoToggle);
 
     auto fillCombo = [] (juce::ComboBox& box, const char* id)
     {
@@ -533,6 +538,7 @@ void AmbienceEditor::layoutContent()
     }
     right.removeFromTop (8);
     outputCard.setBounds (right);
+    monoToStereoToggle.setBounds (right.getRight() - 142, right.getY() + 4, 136, 22);
     {
         auto k = right.reduced (12, 0).withTrimmedTop (26).withTrimmedBottom (10);
         outputKnob.setBounds (k.removeFromLeft (84));
@@ -551,6 +557,7 @@ void AmbienceEditor::timerCallback()
     widthKnob.setEnabled (! mono);
     renderSeg.setEnabledAll (! mono);
     monoSafeToggle.setEnabled (! mono);
+    monoToStereoToggle.setEnabled (! mono);
     advanced->setMonoOutput (mono);
 
     const int obstacle = (int) proc.apvts.getRawParameterValue (pid::obstacle)->load();

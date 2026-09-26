@@ -4,6 +4,7 @@
 
 #include "Params.h"
 #include "RoomModel.h"
+#include "Stereoizer.h"
 
 namespace amb
 {
@@ -90,13 +91,13 @@ private:
 
     // Smoothed control values (per tick)
     Smooth sLogDist, sLogRec, sRolloff, sPan, sTimePan, sPsi, sRho, sMonoSafe, sWidth, sPropMix,
-        sMicB, sAmtObs, sAmtOcc, sBassMix, sAutoGain, sOutput, sRoomLevel, sDecay, sMonoDepth, sEq;
+        sMicB, sAmtObs, sAmtOcc, sBassMix, sAutoGain, sOutput, sRoomLevel, sDecay, sMonoDepth, sEq, sM2S;
     double tickCoeff = 0.0, fastCoeff = 0.0;
 
     // Per-sample ramps
     Ramp rDirect, rGL, rGR, rKs, rTauL, rTauR, rProp, rPropMix, rWS, rWD, rBassMix, rRho, rHpG, rOut, rRoomX, rMonoOut;
     std::array<Ramp, 4> rHpDelay, rHpGain; // [source*2 + ear]
-    Ramp rSafe, rPsiIn, rMonoDepth, rMonoGain;
+    Ramp rSafe, rPsiIn, rMonoDepth, rMonoGain, rM2SMix, rM2SSide;
     Biquad posEqL, posEqR;
     bool posEqActive = false;
 
@@ -105,6 +106,13 @@ private:
     DelayLine propLine[2];
     FittedCascade<2> air, obstruction, occlusion;
     AllpassStage decor[4];
+    Stereoizer stereoizer;
+    bool m2sRunning = false;
+
+    // Mono-content detector for Mono to Stereo on stereo inputs (e.g. a dual-mono clip on a stereo
+    // track): side vs mid energy of the raw input, with hysteresis; held during silence.
+    double detAccM = 0, detAccS = 0, detM = 0, detS = 0, detCoeff = 0;
+    bool detMono = true;
     Svf timeXover, bassHp1, bassHp2;
     DelayLine timeLineM[1], timeLineLP[1];
     DelayLine hpLine[2];

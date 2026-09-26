@@ -255,6 +255,16 @@ void AmbienceProcessor::setStateInformation (const void* data, int sizeInBytes)
                 child.setProperty ("value", amb::migrateRoomIndexV1 ((int) (float) child.getProperty ("value")), nullptr);
         state.setProperty ("stateVersion", stateVersion, nullptr);
     }
+    // Parameters added after the state was saved start at their defaults (the APVTS would otherwise
+    // keep whatever value they currently have).
+    for (const auto& s : amb::paramSpecs())
+        if (! state.getChildWithProperty ("id", juce::String (s.id)).isValid())
+        {
+            juce::ValueTree child ("PARAM");
+            child.setProperty ("id", juce::String (s.id), nullptr);
+            child.setProperty ("value", s.defaultValue, nullptr);
+            state.appendChild (child, nullptr);
+        }
     uiScalePercent = juce::jlimit (50, 200, (int) state.getProperty ("uiScale", 100));
     presets.setCurrentName (state.getProperty ("presetName", "Init (Neutral)").toString());
     apvts.replaceState (state);

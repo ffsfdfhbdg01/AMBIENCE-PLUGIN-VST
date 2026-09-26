@@ -57,19 +57,22 @@ Ta wersja **nie ma jeszcze płatnego podpisu cyfrowego wydawcy** (Apple Develope
 - Sumę kontrolną pobranego pliku możesz porównać z wartością SHA-256 widoczną przy pliku na tej stronie.
 - Kolejne wydania będą podpisane i notaryzowane, gdy repozytorium otrzyma certyfikaty. Wtedy ostrzeżenia znikną.
 
+> Aktualizacja z wcześniejszej wersji: po prostu zainstaluj nową wersję — zastąpi poprzednią, a zapisane projekty otwierają się bez zmian.
+>
 > Aktualizacja z wersji 1.0.0 („Ambience”): instalator sam usuwa starą wtyczkę `Ambience`, a zapisane projekty i presety otwierają się bez zmian (pomieszczenia są automatycznie przypisane do wariantów „A”).
 
 ## ✨ Co potrafi wersja @VERSION@
 
 - **Odległość:** poziom względem odległości nagrania, pochłanianie powietrza (ISO 9613-1), usuwanie efektu zbliżeniowego mikrofonu, opcjonalny Doppler.
 - **16 przestrzeni:** OPEN A/B/C (pole, ulica, podwórko), SMALL, MEDIUM, LARGE i HALL w wariantach **A** (neutralny), **B** (wytłumiony) i **C** (żywy, twarde powierzchnie) — z wczesnymi odbiciami i pogłosem zależnymi od pozycji źródła.
+- 🆕 **Mono → Stereo** (karta *Output*) — zamienia sygnał mono na naturalne stereo, w pełni zgodne z mono: suma L+R to oryginał, oba kanały mają tę samą barwę, bas zostaje w środku. Działa na ścieżkach mono, przy *Input = Mono* i na klipach dual-mono na ścieżkach stereo. Siłę ustawia *Width*. Plus 3 presety *Mono to Stereo*.
 - **Mono Depth** — oddalanie mono dialogu z planu w mono: wyjście L = R, tylko głębia (odległość, powietrze, prawdziwy pogłos mono, przeszkoda), plus 3 presety *Mono Dialogue*.
 - **Equalized Ambience** (domyślnie włączone) — automatyczny EQ z odległości i położenia; po wyłączeniu barwa zostaje jak w nagraniu.
 - **Przycisk ON/OFF** (bypass bez trzasków) i **sprawdzanie aktualizacji** w ustawieniach (ikona koła zębatego).
 - **Panorama:** *Speakers* (poziom + czas, tryb **Mono-safe**) lub *Headphones* (binauralny model głowy).
 - **Mono / Stereo:** przełącznik Auto / Mono / Stereo; szerokość 0–200 % zgodna z mono; Bass Mono.
 - **Przeszkody:** *Obstruction* (obiekt w pomieszczeniu) i *Occlusion* (zasłona, szyba, drzwi płytowe i pełne, ściana G-K, cegła, beton, karoseria), szczeliny, płynne „otwieranie drzwi”.
-- **Auto Gain** (domyślnie wyłączony), **20 presetów filmowych**, presety użytkownika, A/B, Undo/Redo, skalowany interfejs 50–200 %.
+- **Auto Gain** (domyślnie wyłączony), **26 presetów filmowych**, presety użytkownika, A/B, Undo/Redo, skalowany interfejs 50–200 %.
 - Zero latencji, płynna automatyka, zweryfikowane przez pluginval (poziom 10) i walidator VST3 Steinberga.
 
 📖 Instrukcja obsługi: [README](https://github.com/@REPO@/blob/@TAG@/README.md#instrukcja-obsługi) · Opis techniczny: [DESIGN.md](https://github.com/@REPO@/blob/@TAG@/docs/DESIGN.md)

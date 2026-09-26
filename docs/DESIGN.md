@@ -72,6 +72,16 @@ Tryb ściśle monofoniczny. Sygnał wyjściowy to M ścieżki bezpośredniej (od
 ### 3.2b Equalized Ambience
 Główny przełącznik automatycznego EQ zależnego od odległości i położenia (domyślnie ON). Obejmuje: pochłanianie powietrza, kompensację efektu zbliżeniowego oraz *position EQ* — półkę wysoką 5 kHz na kanale oddalonym od źródła (tryb Speakers), −2,5 dB·|pan| **[kalibracja]**, działającą tylko na M (Width pozostaje zgodne z mono). Po wyłączeniu odpowiedź częstotliwościowa jest płaska (test ±0,3 dB), a poziom w paśmie środkowym się nie zmienia (±0,5 dB).
 
+### 3.2c Mono → Stereo
+Konwersja mono → stereo ze stałą sumą mono i bez zabarwienia kanałów (`Source/dsp/Stereoizer.h`). Wyjście to L = M′ + a·S, P = M′ − a·S, gdzie:
+
+- M′ to wszechprzepustowa wersja M, S to sygnał w **kwadraturze** do M′ (±90°), a więc |M′ + jaS| = |M′ − jaS|: oba kanały mają identyczny moduł w każdej częstotliwości (brak przechyłu i zabarwienia; test: ±0,25 dB), a L + P = 2M′ (test: błąd ≤ −100 dB względem M′).
+- Znak kwadratury zmienia się w pasmach ok. 1 oktawy: rozgałęzienia Linkwitza-Rileya 8. rzędu na 200, 420, 850, 1700, 3300, 6500 i 15 000 Hz. Wyjścia LP i HP filtru LR są w fazie, więc (LP − HP)/(LP + HP) jest rzeczywiste i zmienia znak na częstotliwości podziału. Ścieżka M′ przechodzi przez sumy LP + HP (wszechprzepustowe), ścieżka S przez różnice LP − HP; na skrajach S używa tylko HP (dół) i LP (góra), więc bas < 200 Hz i skrajna góra zostają mono. Na koniec para Hilberta Niemitalo (2 × 4 sekcje IIR, błąd ≤ 0,7°) ustawia S w kwadraturze względem M′.
+- Różnica faz między kanałami zmienia znak od pasma do pasma, co daje rozłożony obraz (lateralizacja zależna od częstotliwości; Orban 1970, Gerzon 1992) bez echa i bez ubytków w mono.
+- a = 0,7·Width **[kalibracja]**. Korelacja L/P dla szumu różowego: 0,81 przy 100 %, 0,41 przy 200 % (bas mono wlicza się do korelacji).
+- Aktywne, gdy źródło jest mono: wejście 1-kanałowe, *Input = Mono*, albo detektor treści mono na wejściu stereo (energia S/M < −40 dB → mono, > −30 dB → stereo, histereza, stała czasowa 150 ms, decyzja wstrzymana w ciszy < −90 dBFS). Prawdziwe stereo: test zerowy ≤ −120 dB. Przełączanie crossfade'em 30 ms.
+- Przy włączonym Mono → Stereo dekorelator z punktu 3.3 (poszerzanie mono > 100 %) jest wyłączany; w trybie Headphones dwa wirtualne źródła rozstawia się o ±30°·Width jak dla stereo. Koszt: ok. 0,5 % rdzenia przy 48 kHz.
+
 ### 3.3 Szerokość
 Dla źródeł stereo S jest mnożone przez Width. Źródła mono poszerza dekorelator (4 all-passy Schroedera, 3,1 / 4,7 / 6,3 / 11,3 ms, g = 0,6; zasada Kendalla 1995) — powstały sygnał S jest odejmowany w sumie mono. Głębokość przy 200 % wynosi 0,8 **[kalibracja]**. Bass Mono to filtr górnoprzepustowy LR4 (2 × SVF Butterwortha) na S.
 
@@ -130,9 +140,10 @@ Model deterministyczny: przewidywana zmiana głośności ważonej krzywą K (BS.
 | output | Output | −24…+24 dB | 0 | lin. |
 | monoDepth | Mono Depth | Off/On | Off | przełącznik |
 | eqAmbience | Equalized Ambience | Off/On | **On** | przełącznik |
+| monoToStereo | Mono to Stereo | Off/On | Off | przełącznik |
 | bypass | Bypass | Off/On | Off | przełącznik (bypass hosta, crossfade 20 ms) |
 
-Przełączniki są zaimplementowane jako dwustanowe parametry wyboru. Ich znormalizowana wartość jest kwantowana, więc odtworzony stan jest dokładny (wymóg pluginval). Stan wtyczki ma atrybut `stateVersion` (obecnie 2) oraz przechowuje skalę UI i nazwę presetu.
+Przełączniki są zaimplementowane jako dwustanowe parametry wyboru. Ich znormalizowana wartość jest kwantowana, więc odtworzony stan jest dokładny (wymóg pluginval). Stan wtyczki ma atrybut `stateVersion` (obecnie 2) oraz przechowuje skalę UI i nazwę presetu. Parametry, których nie ma w zapisanym stanie (np. dodane w nowszej wersji), dostają wartości domyślne.
 
 ## 5. Weryfikacja (stan na ostatni commit)
 

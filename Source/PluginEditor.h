@@ -121,8 +121,8 @@ private:
     // Toolbar
     ui::Segmented inputSeg, renderSeg;
     juce::ToggleButton monoSafeToggle { "Mono-safe" }, autoGainToggle { "Auto Gain" }, monoDepthToggle { "Mono Depth" },
-        eqToggle { "Equalized Ambience" };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> monoSafeAtt, autoGainAtt, monoDepthAtt, eqAtt;
+        eqToggle { "Equalized Ambience" }, monoToStereoToggle { juce::String::fromUTF8 ("Mono \xe2\x86\x92 Stereo") };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> monoSafeAtt, autoGainAtt, monoDepthAtt, eqAtt, monoToStereoAtt;
     juce::TextButton advancedBtn { "Advanced" };
     juce::Label statusLabel;
 

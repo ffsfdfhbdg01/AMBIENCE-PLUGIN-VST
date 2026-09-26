@@ -615,17 +615,108 @@ int main()
         check (rms (on[0].data() + 9600, 38000) < rms (off[0].data() + 9600, 38000) * 0.8, "proximity bass removed only with EQ on");
     } });
 
+    tests.push_back ({ "14e. Mono to Stereo: exact mono sum, no tonal change or lean, decorrelated, mono content only", [&]
+    {
+        EngineParams def;
+        check (! def.monoToStereo, "off by default");
+        auto corr = [] (const std::vector<float>& a, const std::vector<float>& b, int from)
+        {
+            double ab = 0, aa = 0, bb = 0;
+            for (size_t i = (size_t) from; i < a.size(); ++i)
+            {
+                ab += (double) a[i] * b[i];
+                aa += (double) a[i] * a[i];
+                bb += (double) b[i] * b[i];
+            }
+            return ab / std::sqrt (aa * bb + 1.0e-30);
+        };
+        auto p = dryParams();
+        p.monoToStereo = true;
+
+        // Mono sum = the Stereoizer's all-pass mid at the centre pan-law gain, sample-exact.
+        const auto x = pinkNoise (96000);
+        const auto o = render (p, { x }, 2);
+        Stereoizer ref;
+        ref.prepare (fs);
+        double worst = 0, sumSq = 0;
+        for (size_t i = 0; i < x.size(); ++i)
+        {
+            float m, sd;
+            ref.process (x[i], m, sd);
+            const double expected = 2.0 * std::cos (kPi / 4.0) * m;
+            worst = std::max (worst, std::abs (o[0][i] + o[1][i] - expected));
+            sumSq += expected * expected;
+        }
+        check (gainToDb (worst / std::sqrt (sumSq / (double) x.size())) <= -100.0, "L + R = all-pass of the input (mono compatible): "
+               + std::to_string (gainToDb (worst / std::sqrt (sumSq / (double) x.size()))) + " dB");
+
+        // Per frequency: L and R equally loud (no lean), close to the original level, bass stays mono.
+        for (double f : { 60.0, 150.0, 300.0, 600.0, 1000.0, 2000.0, 3000.0, 5000.0, 8000.0, 12000.0 })
+        {
+            const auto t = render (p, { sine (f, fs, 48000) }, 2);
+            const double l = gainToDb (rms (t[0].data() + 9600, 38000)), r = gainToDb (rms (t[1].data() + 9600, 38000));
+            const double orig = gainToDb (0.5 / std::sqrt (2.0) * std::cos (kPi / 4.0));
+            near (l - r, 0.0, 0.25, "L/R balance at " + std::to_string ((int) f) + " Hz");
+            check (l - orig > -0.1 && l - orig < 1.8, "level change at " + std::to_string ((int) f) + " Hz: " + std::to_string (l - orig) + " dB");
+            if (f <= 60.0)
+                check (gainToDb (maxAbsDiff (t[0], t[1], 9600) / 0.35) < -30.0, "bass stays mono");
+        }
+
+        // Decorrelation grows with Width; Width 0 keeps L == R.
+        const double c100 = corr (o[0], o[1], 4800);
+        p.width = 200;
+        const auto wide = render (p, { x }, 2);
+        const double c200 = corr (wide[0], wide[1], 4800);
+        p.width = 0;
+        const auto narrow = render (p, { x }, 2);
+        std::printf ("    correlation (pink noise): width 100 %% = %.2f, 200 %% = %.2f\n", c100, c200);
+        check (c100 < 0.92 && c200 < c100 - 0.1 && c200 > 0.0, "decorrelated, stronger with width, no phase inversion");
+        check (maxAbsDiff (narrow[0], narrow[1]) == 0.0, "width 0: L == R");
+        p.width = 100;
+
+        // Stereo input with mono content (dual-mono clip on a stereo track) is converted as well.
+        const auto dual = render (p, { x, x }, 2);
+        check (corr (dual[0], dual[1], 9600) < 0.92, "dual-mono on a stereo input is converted");
+
+        // True stereo content is left untouched (null test against the switch off).
+        const auto y = pinkNoise (96000, 4242u);
+        const auto st = render (p, { x, y }, 2);
+        p.monoToStereo = false;
+        const auto stOff = render (p, { x, y }, 2);
+        p.monoToStereo = true;
+        check (gainToDb (std::max (maxAbsDiff (st[0], stOff[0]), maxAbsDiff (st[1], stOff[1]))) <= -120.0, "stereo content unchanged");
+
+        // Mono Depth (mono output) takes precedence: identical channels.
+        p.monoDepth = true;
+        const auto md = render (p, { x }, 2);
+        check (maxAbsDiff (md[0], md[1]) == 0.0, "Mono Depth wins: L == R");
+        p.monoDepth = false;
+
+        // Toggling while playing is click-free and finite.
+        std::vector<std::pair<int, EngineParams>> automation;
+        auto on = p, off = p;
+        off.monoToStereo = false;
+        automation.push_back ({ 24000, off });
+        automation.push_back ({ 48000, on });
+        const auto sw = render (p, { sine (440, fs, 96000) }, 2, fs, 256, &automation);
+        double maxStep = 0;
+        for (size_t i = 1; i < sw[0].size(); ++i)
+            maxStep = std::max (maxStep, (double) std::abs (sw[0][i] - sw[0][i - 1]));
+        check (maxStep < 0.05, "no clicks when toggling (max step " + std::to_string (maxStep) + ")");
+    } });
+
     tests.push_back ({ "15. CPU benchmark (informative, processing only)", [&]
     {
         const int n = 48000 * 10, block = 512;
         const auto x = pinkNoise (n);
         std::vector<float> l ((size_t) block), r ((size_t) block);
-        for (int roomOn = 0; roomOn < 2; ++roomOn)
+        for (int config = 0; config < 3; ++config)
         {
             EngineParams p;
             p.distance = 10;
             p.pan = 30;
-            p.room = roomOn ? 7 : 0;
+            p.room = config == 1 ? 7 : 0;
+            p.monoToStereo = config == 2;
             SpatialEngine e;
             e.prepare (fs, block);
             e.setParams (p);
@@ -638,7 +729,8 @@ int main()
             }
             const auto t1 = std::chrono::steady_clock::now();
             const double secs = std::chrono::duration<double> (t1 - t0).count();
-            std::printf ("    %s: %.3f %% of one core (48 kHz stereo)\n", roomOn ? "Room Medium A" : "Room Off", 100.0 * secs / 10.0);
+            static const char* names[3] = { "Room Off", "Room Medium A", "Mono to Stereo (room off)" };
+            std::printf ("    %s: %.3f %% of one core (48 kHz stereo)\n", names[config], 100.0 * secs / 10.0);
             check (std::isfinite (l[0]), "rendered");
         }
     } });
