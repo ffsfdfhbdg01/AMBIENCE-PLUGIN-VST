@@ -262,7 +262,9 @@ void AmbienceProcessor::setStateInformation (const void* data, int sizeInBytes)
         {
             juce::ValueTree child ("PARAM");
             child.setProperty ("id", juce::String (s.id), nullptr);
-            child.setProperty ("value", s.defaultValue, nullptr);
+            // Keep Mono did not exist before 1.4: older sessions keep their full-signal widening.
+            const float value = juce::String (s.id) == amb::pid::keepMono ? 0.0f : s.defaultValue;
+            child.setProperty ("value", value, nullptr);
             state.appendChild (child, nullptr);
         }
     uiScalePercent = juce::jlimit (50, 200, (int) state.getProperty ("uiScale", 100));

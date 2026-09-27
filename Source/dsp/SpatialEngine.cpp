@@ -334,18 +334,19 @@ void SpatialEngine::controlTick (bool snap) noexcept
         sM2S.target = (params.monoToStereo && ! params.monoDepth && ! monoOut) ? std::max (1.0 - sPsi.target, monoContent) : 0.0;
         // Mono sources widened beyond 100 % use the same Stereoizer (flat per channel, no comb).
         sWiden.target = (! params.monoDepth && ! monoOut && params.width > 100.0f) ? 1.0 - sPsi.target : 0.0;
+        sKeep.target = (params.monoToStereo && params.keepMono) ? 1.0 : 0.0;
     }
 
     if (snap)
     {
         for (Smooth* s : { &sLogDist, &sLogRec, &sRolloff, &sPan, &sTimePan, &sPsi, &sRho, &sMonoSafe, &sWidth, &sPropMix,
-                           &sMicB, &sAmtObs, &sAmtOcc, &sBassMix, &sOutput, &sRoomLevel, &sDecay, &sMonoDepth, &sEq, &sM2S, &sWiden })
+                           &sMicB, &sAmtObs, &sAmtOcc, &sBassMix, &sOutput, &sRoomLevel, &sDecay, &sMonoDepth, &sEq, &sM2S, &sWiden, &sKeep })
             s->snap();
     }
     else
     {
         for (Smooth* s : { &sLogDist, &sLogRec, &sRolloff, &sPan, &sTimePan, &sPsi, &sRho, &sMonoSafe, &sWidth, &sPropMix,
-                           &sMicB, &sAmtObs, &sAmtOcc, &sBassMix, &sOutput, &sRoomLevel, &sDecay, &sMonoDepth, &sEq, &sM2S, &sWiden })
+                           &sMicB, &sAmtObs, &sAmtOcc, &sBassMix, &sOutput, &sRoomLevel, &sDecay, &sMonoDepth, &sEq, &sM2S, &sWiden, &sKeep })
             s->tick (tickCoeff);
     }
 
@@ -444,6 +445,7 @@ void SpatialEngine::controlTick (bool snap) noexcept
     const double m2s = sM2S.cur;
     setRamp (rWS, monoOut ? 0.0 : w);
     setRamp (rM2SMix, std::max (m2s, sWiden.cur));
+    stereoizer.setKeepMono (sKeep.cur);
     setRamp (rM2SSide, monoOut ? 0.0 : m2s * m2sDepth * w + (1.0 - m2s) * sWiden.cur * widenDepth * std::max (0.0, w - 1.0));
     setRamp (rBassMix, sBassMix.cur);
 

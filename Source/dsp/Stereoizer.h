@@ -8,11 +8,13 @@
 //     one-octave bands (frequency-dependent lateralisation, cf. Orban 1970; Gerzon 1992),
 //   * the bass (< ~200 Hz) and the extreme top stay mono.
 //
-// Structure: an 8th-order Linkwitz-Riley split at each band edge. LR low/high outputs are in phase,
-// so (LP - HP) / (LP + HP) is real-valued with a sign change at the crossover. M' runs through the
-// matching all-pass (LP + HP) chain and S through the (LP - HP) chain; a polyphase IIR Hilbert pair
-// (Niemitalo) then puts S at +90 degrees relative to M'. All filters are bilinear with pre-warping,
-// so the matching between the two paths is exact up to rounding. Pure C++, real-time safe.
+// Structure: an 8-band Linkwitz-Riley (8th order) filter-bank tree with all-pass compensation, so all
+// bands are in phase with their sum (the all-pass M'). S is the band sum with alternating signs
+// (bass band and top band excluded); a polyphase IIR Hilbert pair (Niemitalo) then puts S at +90
+// degrees relative to M'. Because every band is in phase with M', S stays in quadrature even when
+// the band gains change, which is what "Keep Mono" uses: per band, a zero-latency ambience estimate
+// (recorded reverberation + room tone) sets how much of that band goes into S, so the voice stays
+// mono and only the recorded space is widened. Pure C++, real-time safe, zero latency.
 #pragma once
 
 #include "DspCore.h"
@@ -23,73 +25,151 @@ class Stereoizer
 {
 public:
     static constexpr int numEdges = 7;
+    static constexpr int numBands = numEdges + 1;
+    static constexpr int tickLength = 32;
 
     void prepare (double sampleRate)
     {
+        fs = sampleRate;
         static const double edges[numEdges] = { 200, 420, 850, 1700, 3300, 6500, 15000 };
         constexpr double q1 = 0.54119610014619698, q2 = 1.30656296487637653; // 4th-order Butterworth
-        const double sqrt2 = std::sqrt (2.0);
         for (int e = 0; e < numEdges; ++e)
         {
             const double fc = std::min (edges[e], 0.45 * sampleRate);
             const double K = 1.0 / std::tan (kPi * fc / sampleRate);
-            auto& st = stages[(size_t) e];
-            // M' path: LP8 + HP8 = B(-s) / B(s) (all-pass).
-            st.mid[0] = Section::bilinear (1, -1 / q1, 1, 1, 1 / q1, 1, K);
-            st.mid[1] = Section::bilinear (1, -1 / q2, 1, 1, 1 / q2, 1, K);
-            // S path: HP8 = s^8 / B^2 (lowest edge), LP8 = 1 / B^2 (highest edge),
-            // otherwise LP8 - HP8 = (1 - s^2)(1 + s^2)(1 + sqrt2 s + s^2)(1 - sqrt2 s + s^2) / B^2.
-            const double num[4][3] = { { -1, 0, 1 }, { 1, 0, 1 }, { 1, sqrt2, 1 }, { 1, -sqrt2, 1 } };
+            // LR8 = (4th-order Butterworth)^2: low = 1 / B^2, high = s^8 / B^2, all-pass = B(-s) / B(s).
             for (int k = 0; k < 4; ++k)
             {
                 const double q = (k % 2 == 0) ? q1 : q2;
-                if (e == 0)
-                    st.side[k] = Section::bilinear (1, 0, 0, 1, 1 / q, 1, K);
-                else if (e == numEdges - 1)
-                    st.side[k] = Section::bilinear (0, 0, 1, 1, 1 / q, 1, K);
-                else
-                    st.side[k] = Section::bilinear (num[k][0], num[k][1], num[k][2], 1, 1 / q, 1, K);
+                lowProto[(size_t) e][(size_t) k] = Section::bilinear (0, 0, 1, 1, 1 / q, 1, K);
+                highProto[(size_t) e][(size_t) k] = Section::bilinear (1, 0, 0, 1, 1 / q, 1, K);
             }
+            apProto[(size_t) e][0] = Section::bilinear (1, -1 / q1, 1, 1, 1 / q1, 1, K);
+            apProto[(size_t) e][1] = Section::bilinear (1, -1 / q2, 1, 1, 1 / q2, 1, K);
         }
+        // Tree: band e = LP(e) of the high branch of edge e-1, then the all-passes of the edges above
+        // it, so every band is in phase with the total all-pass (Linkwitz-Riley property).
+        for (int e = 0; e < numEdges; ++e)
+        {
+            lowSplit[(size_t) e] = lowProto[(size_t) e];
+            highSplit[(size_t) e] = highProto[(size_t) e];
+            int n = 0;
+            for (int j = e + 1; j < numEdges; ++j)
+            {
+                comp[(size_t) e][(size_t) n++] = apProto[(size_t) j][0];
+                comp[(size_t) e][(size_t) n++] = apProto[(size_t) j][1];
+            }
+            compCount[(size_t) e] = n;
+        }
+        const double tickSeconds = tickLength / fs;
+        envCoeff = std::exp (-1.0 / (0.010 * fs));                        // 10 ms energy envelope
+        gainCoeff = std::exp (-tickSeconds / 0.015);                      // gain smoothing
+        decayPerTick = std::pow (10.0, -6.0 * tickSeconds / assumedT60);  // energy decay of the tail
+        floorWindowTicks = std::max (1, (int) std::round (0.8 / tickSeconds)); // minimum statistics window
         reset();
     }
 
     void reset() noexcept
     {
-        for (auto& st : stages)
-        {
-            for (auto& s : st.mid)
-                s.reset();
-            for (auto& s : st.side)
-                s.reset();
-        }
-        for (auto& h : hilbertMid)
-            h.reset();
-        for (auto& h : hilbertSide)
-            h.reset();
+        for (auto& a : lowSplit) for (auto& sct : a) sct.reset();
+        for (auto& a : highSplit) for (auto& sct : a) sct.reset();
+        for (auto& a : comp) for (auto& sct : a) sct.reset();
+        for (auto& h : hilbertMid) h.reset();
+        for (auto& h : hilbertSide) h.reset();
         midDelay = 0.0;
+        env.fill (0.0);
+        tail.fill (0.0);
+        peak.fill (0.0);
+        minCur.fill (1.0e30);
+        minPrev.fill (1.0e30);
+        floorTicks = 0;
+        gain.fill (1.0);
+        tickPos = 0;
     }
+
+    // 0 = the whole signal is widened; 1 = only the recorded ambience (reverberation after each
+    // sound + steady room tone) is widened, the direct sound (voice) stays mono.
+    void setKeepMono (double amount) noexcept { keepMono = std::clamp (amount, 0.0, 1.0); }
 
     // m: mono input. midOut: all-pass version of m (use it in place of m). sideOut: unit-scale side.
     void process (float m, float& midOut, float& sideOut) noexcept
     {
-        double x = m, s = m;
-        for (auto& st : stages)
+        std::array<double, numBands> band;
+        double rest = m;
+        for (int e = 0; e < numEdges; ++e)
         {
-            x = st.mid[1].process (st.mid[0].process (x));
-            for (auto& sec : st.side)
-                s = sec.process (s);
+            double lo = rest, hi = rest;
+            for (auto& sct : lowSplit[(size_t) e])
+                lo = sct.process (lo);
+            for (auto& sct : highSplit[(size_t) e])
+                hi = sct.process (hi);
+            for (int k = 0; k < compCount[(size_t) e]; ++k)
+                lo = comp[(size_t) e][(size_t) k].process (lo);
+            band[(size_t) e] = lo;
+            rest = hi;
+        }
+        band[numEdges] = rest;
+
+        double mid = 0.0, side = 0.0;
+        for (int b = 0; b < numBands; ++b)
+        {
+            const double v = band[(size_t) b];
+            mid += v;
+            env[(size_t) b] = v * v + envCoeff * (env[(size_t) b] - v * v);
+            // Bands 1..6 (about 200 Hz - 15 kHz) carry the side, with alternating signs; the bass and
+            // the extreme top stay mono.
+            if (b >= 1 && b <= numEdges - 1)
+                side += ((b & 1) != 0 ? 1.0 : -1.0) * gain[(size_t) b] * v;
+        }
+        if (++tickPos >= tickLength)
+        {
+            tickPos = 0;
+            updateGains();
         }
         for (auto& h : hilbertMid)
-            x = h.process (x);
+            mid = h.process (mid);
         for (auto& h : hilbertSide)
-            s = h.process (s);
+            side = h.process (side);
         midOut = (float) midDelay; // the Hilbert pair needs one sample of delay on this path
-        midDelay = x;
-        sideOut = (float) s;
+        midDelay = mid;
+        sideOut = (float) side;
     }
 
 private:
+    // Zero-latency ambience estimate per band (cf. Lebart et al. 2001: late reverberation decays
+    // exponentially with the room's T60): the tail estimate follows the energy with an instant rise
+    // to kappa * energy and decays at the assumed T60; the room-tone floor is a minimum tracker.
+    // Ambience share = (tail + floor) / energy, limited to 1.
+    void updateGains() noexcept
+    {
+        for (int b = 1; b <= numEdges - 1; ++b)
+        {
+            const double e = env[(size_t) b];
+            double& t = tail[(size_t) b];
+            t = std::max (t * decayPerTick, kappa * e);
+            minCur[(size_t) b] = std::min (minCur[(size_t) b], e);
+            // Room tone: minimum over the last 0.8-1.6 s (minimum statistics, Martin 2001), with a
+            // bias factor for the minimum of a fluctuating envelope.
+            const double f = std::min (minCur[(size_t) b], minPrev[(size_t) b]) * floorBias;
+            // Decay phase: once the band has fallen clearly below its recent peak (the peak itself
+            // decaying at the room's rate), what remains is the room's reverberation, whatever the
+            // recording's direct-to-reverberant ratio: 3 dB below -> direct, 9 dB below -> ambience.
+            double& pk = peak[(size_t) b];
+            pk = std::max (pk * decayPerTick, e);
+            const double dropDb = 10.0 * std::log10 (pk / std::max (e, 1.0e-20));
+            const double decayShare = std::clamp ((dropDb - 3.0) / 6.0, 0.0, 1.0);
+            const double share = std::max (decayShare, std::min (1.0, (t + f) / std::max (e, 1.0e-20)));
+            const double target = 1.0 + keepMono * (std::sqrt (share) - 1.0);
+            gain[(size_t) b] = target + gainCoeff * (gain[(size_t) b] - target);
+        }
+        if (++floorTicks >= floorWindowTicks)
+        {
+            floorTicks = 0;
+            minPrev = minCur;
+            minCur.fill (1.0e30);
+        }
+    }
+
     static double flush (double v) noexcept { return std::abs (v) < 1.0e-30 ? 0.0 : v; }
 
     struct Section
@@ -146,19 +226,23 @@ private:
         return h;
     }
 
-    struct Stage
-    {
-        Section mid[2];
-        Section side[4];
-    };
-
     static constexpr double hilbertA[4] = { 0.6923878, 0.9360654322959, 0.9882295226860, 0.9987488452737 };
     static constexpr double hilbertB[4] = { 0.4021921162426, 0.8561710882420, 0.9722909545651, 0.9952884791278 };
+    static constexpr double assumedT60 = 0.6;  // s, typical location interior (listening calibration)
+    static constexpr double kappa = 0.1;       // reverberant share of the direct energy (-10 dB)
+    static constexpr double floorBias = 2.0;   // minimum of a 10 ms energy envelope vs its mean
 
-    std::array<Stage, numEdges> stages;
+    double fs = 48000.0;
+    std::array<std::array<Section, 4>, numEdges> lowProto {}, highProto {}, lowSplit {}, highSplit {};
+    std::array<std::array<Section, 2>, numEdges> apProto {};
+    std::array<std::array<Section, 2 * (numEdges - 1)>, numEdges> comp {};
+    std::array<int, numEdges> compCount {};
     std::array<HilbertSection, 4> hilbertMid = makeHilbert (hilbertA);
     std::array<HilbertSection, 4> hilbertSide = makeHilbert (hilbertB);
     double midDelay = 0.0;
+    std::array<double, numBands> env {}, tail {}, peak {}, minCur {}, minPrev {}, gain {};
+    double envCoeff = 0.0, gainCoeff = 0.0, decayPerTick = 1.0, keepMono = 0.0;
+    int tickPos = 0, floorTicks = 0, floorWindowTicks = 1;
 };
 
 } // namespace amb

@@ -684,6 +684,7 @@ int main()
         };
         auto p = dryParams();
         p.monoToStereo = true;
+        p.keepMono = false; // full-signal widening (Keep Mono: test 14g)
 
         // Mono sum = the Stereoizer's all-pass mid at the centre pan-law gain, sample-exact.
         const auto x = pinkNoise (96000);
@@ -902,6 +903,59 @@ int main()
             hi = std::max (hi, l);
         }
         check (hi - lo < 3.5, "mono at width 200 %: per-channel response within " + std::to_string (hi - lo) + " dB");
+    } });
+
+    tests.push_back ({ "14g. Keep Mono: the voice stays mono, the recorded ambience becomes stereo", [&]
+    {
+        EngineParams def;
+        check (def.keepMono, "Keep Mono on by default");
+        // Synthetic location dialogue: 100 ms "syllables" every 500 ms, a diffuse reverberant tail
+        // (independent noise, T60 0.6 s, -8 dB) and a steady room tone at -40 dB.
+        const int n = 48000 * 8;
+        const auto dry = pinkNoise (n, 11u), rev = pinkNoise (n, 22u), tone = pinkNoise (n, 33u);
+        std::vector<float> x ((size_t) n);
+        const int period = 24000, burst = 4800;
+        for (int i = 0; i < n; ++i)
+        {
+            const int t = i % period;
+            const double onset = std::min (1.0, t / 240.0);
+            const double direct = t < burst ? onset : 0.0;
+            const double tail = 0.4 * std::min (1.0, t / 2400.0) * std::exp (-6.91 * std::max (0, t - burst) / (0.6 * fs));
+            x[(size_t) i] = (float) (0.3 * (direct * dry[(size_t) i] + tail * rev[(size_t) i]) + 0.003 * tone[(size_t) i]);
+        }
+        auto segmentCorrelation = [&] (const std::vector<std::vector<float>>& o, int from, int to)
+        {
+            double lr = 0, ll = 0, rr = 0;
+            for (int start = 2 * period; start + period <= n; start += period)
+                for (int i = start + from; i < start + to; ++i)
+                {
+                    lr += (double) o[0][(size_t) i] * o[1][(size_t) i];
+                    ll += (double) o[0][(size_t) i] * o[0][(size_t) i];
+                    rr += (double) o[1][(size_t) i] * o[1][(size_t) i];
+                }
+            return lr / std::sqrt (ll * rr + 1.0e-30);
+        };
+        auto p = dryParams();
+        p.monoToStereo = true;
+        p.keepMono = true;
+        const auto keep = render (p, { x }, 2);
+        p.keepMono = false;
+        const auto full = render (p, { x }, 2);
+        const double keepVoice = segmentCorrelation (keep, 480, burst - 480), keepTail = segmentCorrelation (keep, 9600, 19200);
+        const double fullVoice = segmentCorrelation (full, 480, burst - 480), fullTail = segmentCorrelation (full, 9600, 19200);
+        std::printf ("    L/R correlation: Keep Mono voice %.2f, ambience %.2f; full widening voice %.2f, ambience %.2f\n", keepVoice,
+                     keepTail, fullVoice, fullTail);
+        check (keepVoice > 0.93, "Keep Mono: voice stays (nearly) mono");
+        check (keepTail < fullTail + 0.06, "Keep Mono: recorded ambience is widened (nearly) as much as with full widening");
+        check (fullVoice < keepVoice - 0.1, "without Keep Mono the voice is widened too");
+        // Mono compatibility is unchanged: L + R is the all-pass mid in both modes.
+        double worst = 0, e = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            worst = std::max (worst, (double) std::abs ((keep[0][(size_t) i] + keep[1][(size_t) i]) - (full[0][(size_t) i] + full[1][(size_t) i])));
+            e += (double) x[(size_t) i] * x[(size_t) i];
+        }
+        check (gainToDb (worst / std::sqrt (e / n)) < -100.0, "Keep Mono does not change the mono sum");
     } });
 
     tests.push_back ({ "15. CPU benchmark (informative, processing only)", [&]

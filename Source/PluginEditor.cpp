@@ -363,6 +363,11 @@ AmbienceEditor::AmbienceEditor (AmbienceProcessor& p)
                                    "becomes a natural stereo image. Mono-compatible: L + R stays the original sound, both channels keep "
                                    "the same tone and level, bass stays centred. The amount follows Width. True stereo input is not changed.");
     monoToStereoAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, pid::monoToStereo, monoToStereoToggle);
+    content.addAndMakeVisible (keepMonoToggle);
+    keepMonoToggle.setTooltip ("Keep Mono (with Mono to Stereo, on by default): the voice / direct sound stays mono in the centre and only "
+                               "the space in the recording becomes stereo - its reverberation after each word and the room tone. "
+                               "Off: the whole signal is widened. Zero latency; the mono sum is unchanged either way.");
+    keepMonoAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, pid::keepMono, keepMonoToggle);
 
     auto fillCombo = [] (juce::ComboBox& box, const char* id)
     {
@@ -539,6 +544,7 @@ void AmbienceEditor::layoutContent()
     right.removeFromTop (8);
     outputCard.setBounds (right);
     monoToStereoToggle.setBounds (right.getRight() - 142, right.getY() + 4, 136, 22);
+    keepMonoToggle.setBounds (right.getRight() - 142 - 112, right.getY() + 4, 108, 22);
     {
         auto k = right.reduced (12, 0).withTrimmedTop (26).withTrimmedBottom (10);
         outputKnob.setBounds (k.removeFromLeft (84));
@@ -558,6 +564,7 @@ void AmbienceEditor::timerCallback()
     renderSeg.setEnabledAll (! mono);
     monoSafeToggle.setEnabled (! mono);
     monoToStereoToggle.setEnabled (! mono);
+    keepMonoToggle.setEnabled (! mono && proc.apvts.getRawParameterValue (pid::monoToStereo)->load() > 0.5f);
     advanced->setMonoOutput (mono);
 
     const int obstacle = (int) proc.apvts.getRawParameterValue (pid::obstacle)->load();
