@@ -1020,6 +1020,34 @@ int main()
         check (hp > 0.95 && hp > spk + 0.15, "headphones: coherent low-frequency tail");
     } });
 
+    tests.push_back ({ "14i. Proximity: near a wall the first reflection comes earlier", [&]
+    {
+        // Early reflection energy (0-20 ms) relative to 20-80 ms (a C20-like clarity measure).
+        auto earlyRatioDb = [&] (double proximity)
+        {
+            RoomModel rm;
+            rm.prepare (fs);
+            rm.configure (10, 1.0); // Large A
+            rm.setProximity (proximity);
+            rm.setGeometry (3.0, 0.3, 1.0, 1.0, 1.0, 32);
+            rm.snapGeometry();
+            const int n = (int) (0.08 * fs), split = (int) (0.02 * fs);
+            double early = 0, late = 0;
+            for (int i = 0; i < n; ++i)
+            {
+                float l, r;
+                rm.process (i == 0 ? 1.0f : 0.0f, l, r);
+                (i < split ? early : late) += (double) l * l + (double) r * r;
+            }
+            return 10.0 * std::log10 (early / late);
+        };
+        const double far = earlyRatioDb (0.0), mid = earlyRatioDb (0.5), near = earlyRatioDb (1.0);
+        std::printf ("    early (0-20 ms) / later (20-80 ms) reflection energy: far %+.1f dB, default %+.1f dB, adjacent %+.1f dB\n", far, mid, near);
+        check (near > mid + 3.0 && mid > far - 0.5, "reflections move earlier as the listener approaches the walls");
+        EngineParams def;
+        check (def.proximity == 50.0f, "default 50 % (previous geometry)");
+    } });
+
     tests.push_back ({ "15. CPU benchmark (informative, processing only)", [&]
     {
         const int n = 48000 * 10, block = 512;

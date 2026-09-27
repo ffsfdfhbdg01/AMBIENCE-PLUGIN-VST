@@ -91,7 +91,7 @@ private:
 
     // Smoothed control values (per tick)
     Smooth sLogDist, sLogRec, sRolloff, sPan, sTimePan, sPsi, sRho, sMonoSafe, sWidth, sPropMix,
-        sMicB, sAmtObs, sAmtOcc, sBassMix, sAutoGain, sOutput, sRoomLevel, sDecay, sMonoDepth, sEq, sM2S, sWiden, sKeep;
+        sMicB, sAmtObs, sAmtOcc, sBassMix, sAutoGain, sOutput, sRoomLevel, sDecay, sMonoDepth, sEq, sM2S, sWiden, sKeep, sProx;
     double tickCoeff = 0.0, fastCoeff = 0.0;
 
     // Per-sample ramps

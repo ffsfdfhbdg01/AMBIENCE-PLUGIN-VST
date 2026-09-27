@@ -280,7 +280,12 @@ public:
 
         const auto& s = roomSpec (roomType);
         const double W = s.width, L = s.length, H = s.height;
-        const double lx = 0.5 * W, ly = 0.3 * L, lz = std::min (1.6, 0.6 * H);
+        // Listener / microphone position from Proximity: 0 = room centre (reflections late and even),
+        // 0.5 = centre line, 30 % of the length from the front wall (default), 1 = near a corner
+        // (strong reflections right after the direct sound; cf. "Proximity" in film reverbs).
+        const double lx = W * (0.5 - 0.8 * std::max (0.0, proximity - 0.5));
+        const double ly = L * (0.5 - 0.4 * proximity);
+        const double lz = std::min (1.6, 0.6 * H);
         // Sources further away than the room is large stay a proportionate distance from the walls:
         // parking them right at a wall would add an artificial short-delay comb (flanging).
         const double margin = std::clamp (0.12 * std::min (W, L), 0.3, 3.0);
@@ -321,6 +326,9 @@ public:
     // (Woodworth / Brown & Duda) and head shadow instead of amplitude panning; the tail gets a
     // natural interaural coherence at low frequencies. Call before setGeometry().
     void setBinaural (double amount) noexcept { binaural = std::clamp (amount, 0.0, 1.0); }
+
+    // Listener / microphone distance to the walls, 0..1 (see setGeometry). Call before setGeometry().
+    void setProximity (double amount) noexcept { proximity = std::clamp (amount, 0.0, 1.0); }
 
     void snapGeometry() noexcept
     {
@@ -772,7 +780,7 @@ private:
     std::array<FirstOrder, numLines> shelf {}, lowShelf {};
     std::array<FirstOrder, 2> shadowHp {};
     FirstOrder tailSideHp;
-    double binaural = 0.0;
+    double binaural = 0.0, proximity = 0.5;
     int binauralTicks = 0;
     struct Lfo
     {

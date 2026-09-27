@@ -69,6 +69,7 @@ namespace pid
     inline constexpr const char* eqAmbience = "eqAmbience";
     inline constexpr const char* monoToStereo = "monoToStereo";
     inline constexpr const char* keepMono = "keepMono";
+    inline constexpr const char* proximity = "proximity";
 } // namespace pid
 
 inline const std::vector<ParamSpec>& paramSpecs()
@@ -112,6 +113,7 @@ inline const std::vector<ParamSpec>& paramSpecs()
         { pid::eqAmbience, "Equalized Ambience", K::toggle, 0, 1, 1, 1, S::linear, "", {} },
         { pid::monoToStereo, "Mono to Stereo", K::toggle, 0, 1, 0, 1, S::linear, "", {} },
         { pid::keepMono, "Keep Mono", K::toggle, 0, 1, 1, 1, S::linear, "", {} },
+        { pid::proximity, "Proximity", K::floating, 0, 100, 50, 0.1f, S::linear, "%", {} },
     };
     return specs;
 }
@@ -157,6 +159,7 @@ struct EngineParams
     bool eqAmbience = true; // automatic distance/position EQ (air absorption, proximity, position shading)
     bool monoToStereo = false; // mono signal in -> mono-compatible stereo out (amount follows Width)
     bool keepMono = true;      // with Mono to Stereo: only the recorded ambience is widened, the voice stays mono
+    float proximity = 50;      // listener/mic position: 0 = room centre (far from walls), 100 = near a wall corner
 
     // Sets a value by parameter ID (plain units). Unknown IDs are ignored.
     void set (const std::string& id, float v)
@@ -195,6 +198,7 @@ struct EngineParams
         else if (id == pid::eqAmbience) eqAmbience = b();
         else if (id == pid::monoToStereo) monoToStereo = b();
         else if (id == pid::keepMono) keepMono = b();
+        else if (id == pid::proximity) proximity = v;
     }
 };
 

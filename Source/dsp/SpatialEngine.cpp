@@ -143,6 +143,7 @@ void SpatialEngine::computeTargets() noexcept
     sOutput.target = std::clamp ((double) p.output, -24.0, 24.0);
     sRoomLevel.target = std::clamp ((double) p.roomLevel, -24.0, 12.0);
     sDecay.target = std::clamp ((double) p.decay, 50.0, 200.0) / 100.0;
+    sProx.target = std::clamp ((double) p.proximity, 0.0, 100.0) / 100.0;
     sAutoGain.target = p.autoGain ? autoGainTargetDb : 0.0;
     sMonoDepth.target = (p.monoDepth || monoOut) ? 1.0 : 0.0;
 
@@ -340,13 +341,13 @@ void SpatialEngine::controlTick (bool snap) noexcept
     if (snap)
     {
         for (Smooth* s : { &sLogDist, &sLogRec, &sRolloff, &sPan, &sTimePan, &sPsi, &sRho, &sMonoSafe, &sWidth, &sPropMix,
-                           &sMicB, &sAmtObs, &sAmtOcc, &sBassMix, &sOutput, &sRoomLevel, &sDecay, &sMonoDepth, &sEq, &sM2S, &sWiden, &sKeep })
+                           &sMicB, &sAmtObs, &sAmtOcc, &sBassMix, &sOutput, &sRoomLevel, &sDecay, &sMonoDepth, &sEq, &sM2S, &sWiden, &sKeep, &sProx })
             s->snap();
     }
     else
     {
         for (Smooth* s : { &sLogDist, &sLogRec, &sRolloff, &sPan, &sTimePan, &sPsi, &sRho, &sMonoSafe, &sWidth, &sPropMix,
-                           &sMicB, &sAmtObs, &sAmtOcc, &sBassMix, &sOutput, &sRoomLevel, &sDecay, &sMonoDepth, &sEq, &sM2S, &sWiden, &sKeep })
+                           &sMicB, &sAmtObs, &sAmtOcc, &sBassMix, &sOutput, &sRoomLevel, &sDecay, &sMonoDepth, &sEq, &sM2S, &sWiden, &sKeep, &sProx })
             s->tick (tickCoeff);
     }
 
@@ -483,6 +484,7 @@ void SpatialEngine::controlTick (bool snap) noexcept
         rooms[(size_t) other].configure (pendingRoom, sDecay.cur);
         rooms[(size_t) other].reset();
         rooms[(size_t) other].setBinaural (rho);
+        rooms[(size_t) other].setProximity (sProx.cur);
         rooms[(size_t) other].setGeometry (r, pan * kPi / 2.0, rr, n, roomLevelLin, L);
         rooms[(size_t) other].snapGeometry();
         activeRoom = other;
@@ -508,6 +510,7 @@ void SpatialEngine::controlTick (bool snap) noexcept
         if (i == activeRoom)
             room.setDecay (sDecay.cur);
         room.setBinaural (rho);
+        room.setProximity (sProx.cur);
         room.setGeometry (r, pan * kPi / 2.0, rr, n, roomLevelLin, L);
         if (snap)
             room.snapGeometry();

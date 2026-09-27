@@ -143,11 +143,13 @@ public:
           tempKnob (p.apvts, pid::temperature, "Temperature", "Air temperature for ISO 9613-1 absorption."),
           humidityKnob (p.apvts, pid::humidity, "Humidity", "Relative humidity for ISO 9613-1 absorption."),
           decayKnob (p.apvts, pid::decay, "Decay", "Scales the room reverberation time (T60)."),
+          proximityKnob (p.apvts, pid::proximity, "Proximity", "Microphone / listener distance to the walls. 0 % = middle of the room (reflections late and even), "
+                         "100 % = near a wall or corner (strong reflections right after the direct sound). 50 % = default position."),
           thicknessKnob (p.apvts, pid::thickness, "Thickness", "Scales the partition mass (and its coincidence frequency)."),
           leakKnob (p.apvts, pid::leak, "Leak", "Gaps and cracks (open area 0-10 %, logarithmic). Let the brighter part of the sound through, e.g. the gap under a door."),
           agRangeKnob (p.apvts, pid::autoGainRange, "AG Range", "Maximum auto gain compensation.")
     {
-        for (auto* k : { &recKnob, &rolloffKnob, &timePanKnob, &tempKnob, &humidityKnob, &decayKnob, &thicknessKnob, &leakKnob, &agRangeKnob })
+        for (auto* k : { &recKnob, &rolloffKnob, &timePanKnob, &tempKnob, &humidityKnob, &decayKnob, &proximityKnob, &thicknessKnob, &leakKnob, &agRangeKnob })
             addAndMakeVisible (k);
 
         auto combo = [this, &p] (juce::ComboBox& box, const char* id, std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>& att, const juce::String& tip)
@@ -231,7 +233,7 @@ public:
             comboLabels.push_back ({ "BASS MONO", &bassMonoBox });
             propToggle.setBounds (r2.removeFromTop (58).removeFromBottom (26).withWidth (170));
         }
-        section ("ROOM, OBSTACLE & GAIN", { &decayKnob, &thicknessKnob, &leakKnob, &agRangeKnob });
+        section ("ROOM, OBSTACLE & GAIN", { &decayKnob, &proximityKnob, &thicknessKnob, &leakKnob, &agRangeKnob });
     }
 
     void setMonoOutput (bool mono)
@@ -245,7 +247,7 @@ public:
 
 private:
     AmbienceProcessor& proc;
-    ui::Knob recKnob, rolloffKnob, timePanKnob, tempKnob, humidityKnob, decayKnob, thicknessKnob, leakKnob, agRangeKnob;
+    ui::Knob recKnob, rolloffKnob, timePanKnob, tempKnob, humidityKnob, decayKnob, proximityKnob, thicknessKnob, leakKnob, agRangeKnob;
     juce::ComboBox panLawBox, micBox, bassMonoBox;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> panLawAtt, micAtt, bassMonoAtt;
     juce::ToggleButton airToggle { "Air Absorption" }, propToggle { "Propagation Delay" };
