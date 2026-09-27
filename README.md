@@ -25,8 +25,8 @@ Strona wydania zawiera instrukcję instalacji krok po kroku.
 
 ## Najważniejsze cechy
 - **Odległość:** prawo odwrotnych kwadratów liczone względem odległości nagrania, pochłanianie powietrza wg ISO 9613-1, stosunek dźwięku bezpośredniego do pogłosu, wczesne odbicia i pogłos zależne od pozycji, kompensacja efektu zbliżeniowego. Doppler i opóźnienie propagacji są opcjonalne.
-- **Panorama:** w trybie *Speakers* hybryda poziom + czas z trybem **Mono-safe**. W trybie *Headphones* działa binauralny model sferycznej głowy (ITD Woodwortha, cień głowy Browna–Dudy, pole bliskie).
-- **Mono / Stereo:** przełącznik *Input* (Auto / Mono / Stereo). Obsługiwane układy: 1→1, 1→2, 2→2.
+- **Panorama:** w trybie *Speakers* hybryda poziom + czas z trybem **Mono-safe**. W trybie *Headphones* działa binauralny model sferycznej głowy (ITD Woodwortha, cień głowy Browna–Dudy, pole bliskie) — także dla odbić, a ogon pogłosu ma naturalną spójność basu między uszami.
+- **Mono / Stereo / Surround:** przełącznik *Input* (Auto / Mono / Stereo). Obsługiwane układy: 1→1, 1→2, 2→2 oraz wyjścia **5.0, 5.1, 7.0, 7.1, 5.1.2, 5.1.4, 7.1.2, 7.1.4** (z mono, stereo albo z tego samego układu, np. na szynie surround). W surround dialog w centrum trafia do kanału C, panorama działa po L–C–R, odbicia od ścian bocznych i tylnej idą do surroundów, odbicie od sufitu do kanałów wysokościowych, a pogłos jest osobno zdekorelowany w każdym kanale (LFE cichy, przy wejściu surround LFE przechodzi bez zmian).
 - **Szerokość** 0–200 % zgodna z mono: suma L+R nie zmienia się przy poszerzaniu. Do tego *Bass Mono*.
 - **Przeszkody:**
   - *Obstruction* — dyfrakcja wg Maekawy;
@@ -39,7 +39,7 @@ Strona wydania zawiera instrukcję instalacji krok po kroku.
   - deterministyczny render, niezależny od bufora,
   - stałe ID parametrów i wersjonowany stan.
 - **Mono Depth:** tryb dla mono dialogu z planu. Wyjście jest ściśle mono (L = R), a działają tylko wskazówki głębi: odległość, powietrze, pomieszczenie (prawdziwy pogłos mono zamiast składania stereo) i przeszkoda. Bez panoramy, szerokości i różnic czasu.
-- **Mono → Stereo:** zamienia sygnał mono na naturalne stereo (przełącznik w karcie *Output*). Działa na ścieżkach mono, przy *Input = Mono* oraz na ścieżkach stereo z identycznymi kanałami (dual-mono). Jest w pełni zgodne z mono: suma L+R to oryginalny dźwięk, oba kanały mają tę samą barwę i poziom, a bas zostaje w środku. Siłę efektu ustawia *Width*. Prawdziwe stereo przechodzi bez zmian.
+- **Mono → Stereo + Keep Mono:** zamienia sygnał mono na naturalne stereo (przełączniki w karcie *Output*). Z **Keep Mono** (domyślnie włączone) głos zostaje mono w środku, a stereo staje się tylko przestrzeń zapisana w nagraniu — pogłos po każdym słowie i szum tła pomieszczenia (bez latencji). Bez Keep Mono poszerzany jest cały sygnał. Działa na ścieżkach mono, przy *Input = Mono* oraz na ścieżkach stereo z identycznymi kanałami (dual-mono). Jest w pełni zgodne z mono: suma L+R to oryginalny dźwięk, oba kanały mają tę samą barwę i poziom, a bas zostaje w środku. Siłę efektu ustawia *Width*. Prawdziwe stereo przechodzi bez zmian.
 - **Equalized Ambience** (domyślnie **włączone**): automatyczny EQ wyliczany z odległości i położenia — pochłanianie powietrza, usuwanie basu z efektu zbliżeniowego mikrofonu i delikatne przyciemnienie góry po stronie oddalonej od źródła. Po wyłączeniu zmienia się tylko poziom, czas i pomieszczenie, a barwa zostaje jak w nagraniu.
 - **ON/OFF:** przycisk zasilania w lewym górnym rogu (bypass bez trzasków — sygnał przechodzi bez zmian, interfejs przygasa).
 - **Sprawdzanie aktualizacji:** ikona koła zębatego → *Check for updates…* porównuje wersję z najnowszym wydaniem na GitHubie i proponuje przejście do strony pobierania.
@@ -156,6 +156,7 @@ Presety użytkownika są zapisywane jako pliki `.ambpreset` (XML):
 | **Mono Depth** (domyślnie OFF) | Dla mono dialogu z planu: wyjście mono (L = R, na ścieżce mono jeden kanał), tylko głębia. Odległość, powietrze, pomieszczenie (dedykowane wyjście mono pogłosu — bez filtrowania grzebieniowego ze składania stereo), przeszkoda i efekt zbliżeniowy działają. Pan, Width, Time Pan i tryb Headphones są nieaktywne. Na ścieżce mono (1→1) wtyczka zawsze pracuje w ten sposób. |
 | **Mono → Stereo** (domyślnie OFF, karta *Output*) | Zamienia sygnał mono na stereo. Działa, gdy źródło jest mono: ścieżka mono (1→2), *Input = Mono* albo ścieżka stereo z identycznymi kanałami (wykrywane automatycznie, np. klip dual-mono). Metoda: pasmowa kwadratura faz M/S — w kolejnych pasmach (ok. 1 oktawa, 200 Hz – 15 kHz) jeden kanał wyprzedza drugi w fazie na przemian, więc dźwięk rozkłada się szeroko, a nie jak echo. **Suma mono = oryginał** (bez filtrowania grzebieniowego), L i P mają identyczną barwę i poziom w każdej częstotliwości, bas < 200 Hz zostaje mono. *Width* ustawia siłę: 0 % = mono, 100 % = naturalnie, 200 % = bardzo szeroko. Pan, pomieszczenie i przeszkody działają jak zwykle. Nieaktywne przy *Mono Depth* i na ścieżce mono (1→1). Prawdziwe stereo nie jest zmieniane. |
 | **Auto Gain** (domyślnie OFF) | Kompensuje ubytek głośności wynikający z odległości, przeszkody i pomieszczenia. Przydaje się, gdy poziom ustawiasz osobno suwakiem, a wtyczki używasz tylko do barwy i przestrzeni. |
+| **Keep Mono** (domyślnie ON, karta *Output*, działa z *Mono → Stereo*) | Głos (dźwięk bezpośredni) zostaje mono w środku, a w stereo przechodzi tylko przestrzeń nagrania: pogłos pomieszczenia po każdej sylabie (faza zaniku) i szum tła (room tone). Dla każdego z 8 pasm estymator bez latencji ocenia, ile energii to pogłos/tło, i tylko tę część kieruje do sygnału stereo. Idealne do dialogu z planu: aktor zostaje w centrum, pomieszczenie się otwiera. Wyłączone: poszerzany jest cały sygnał (jak w 1.3). Suma mono w obu trybach jest identyczna. |
 | **Advanced** | Panel parametrów szczegółowych (poniżej). |
 
 ### Scena (widok z góry)
@@ -202,6 +203,7 @@ Po wyłączeniu barwa nagrania zostaje nietknięta. Przeszkody (Obstruction/Occl
 | Bass Mono | Poniżej tej częstotliwości sygnał pozostaje mono. |
 | Propagation Delay | Opóźnienie r/c z efektem Dopplera — do przejazdów. **Przesuwa dźwięk względem obrazu** (np. 34 m ≈ 100 ms), dlatego domyślnie jest wyłączone. |
 | Decay | Skalowanie czasu pogłosu. |
+| Proximity | Odległość mikrofonu/słuchacza od ścian: 0 % = środek pomieszczenia (odbicia późne i równe), 50 % = położenie domyślne, 100 % = blisko ściany lub narożnika (silne odbicia tuż po dźwięku bezpośrednim). |
 | Thickness | Grubość (masa) przegrody. |
 | Leak | Szczeliny i nieszczelności. Przepuszczają jaśniejszą część dźwięku (szpara pod drzwiami, uchylone okno). |
 | AG Range | Maksymalna kompensacja Auto Gain. |
@@ -215,7 +217,8 @@ Wszystkie mają wyłączony Auto Gain i Output 0 dB — poziom ustawiasz w miksi
 
 ### Wskazówki do pracy przy filmie
 - **Mono dialog z planu:** włącz *Mono Depth* (lub użyj presetów *Mono Dialogue*). Ustaw *Recorded* na odległość mikrofonu, *Distance* na odległość w kadrze, wybierz pomieszczenie. Dialog oddala się bez rozlewania w stereo i bez problemów przy downmiksie.
-- **Mono na stereo:** mono efekt, atmosfera albo dialog, który ma „oddychać” w stereo — włącz *Mono → Stereo* i ustaw *Width* (100 % naturalnie, 150–200 % szeroko). Korelometr pokaże poszerzenie; suma mono pozostaje oryginałem, więc downmix jest bezpieczny.
+- **Mono na stereo:** dialog z planu — włącz *Mono → Stereo* z *Keep Mono*: aktor zostaje w środku, a pomieszczenie z nagrania staje się stereo. Efekty i atmosfery — wyłącz *Keep Mono*, żeby poszerzyć cały dźwięk. *Width* ustawia siłę (100 % naturalnie, 150–200 % szeroko). Suma mono pozostaje oryginałem, więc downmix jest bezpieczny.
+- **Surround / Atmos:** wstaw wtyczkę na ścieżkę mono z wyjściem 5.1/7.1 (albo na szynę 5.1/7.1.x). Dialog w centrum idzie do C, a pomieszczenie wypełnia surroundy (i sufit w 7.1.4) z tym samym stosunkiem dźwięku bezpośredniego do pogłosu co w stereo.
 - **Dialog z boom/lav na plan ogólny:** ustaw *Recorded* na rzeczywistą odległość mikrofonu, *Distance* na odległość kamery, a *Room* na podobne wnętrze. Pogłos da wrażenie odległości; samo ściszenie go nie da.
 - **Zza ściany / drzwi:** wybierz *Occlusion* i materiał, a *Leak* ustaw według szczelności. Jeśli efekt ma być słyszalny, włącz Auto Gain albo podnieś poziom na suwaku — przegrody tłumią realnie 20–60 dB.
 - **Zgodność z mono:** zostaw *Mono-safe* włączone i obserwuj korelometr. Tryb *Headphones* służy do odsłuchu słuchawkowego i materiałów binauralnych, nie do miksu głośnikowego.

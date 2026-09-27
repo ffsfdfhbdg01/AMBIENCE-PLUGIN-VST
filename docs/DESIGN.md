@@ -82,7 +82,19 @@ Konwersja mono → stereo ze stałą sumą mono i bez zabarwienia kanałów (`So
 - Różnica faz między kanałami zmienia znak od pasma do pasma, co daje rozłożony obraz (lateralizacja zależna od częstotliwości; Orban 1970, Gerzon 1992) bez echa i bez ubytków w mono.
 - a = 0,7·Width **[kalibracja]**. Korelacja L/P dla szumu różowego: 0,81 przy 100 %, 0,41 przy 200 % (bas mono wlicza się do korelacji).
 - Aktywne, gdy źródło jest mono: wejście 1-kanałowe, *Input = Mono*, albo detektor treści mono na wejściu stereo (energia S/M < −40 dB → mono, > −30 dB → stereo, histereza, stała czasowa 150 ms, decyzja wstrzymana w ciszy < −90 dBFS). Prawdziwe stereo: test zerowy ≤ −120 dB. Przełączanie crossfade'em 30 ms.
+- **Struktura (1.4):** jawny bank 8 pasm — drzewo rozgałęzień LR8 z kompensacją all-pass, więc każde pasmo jest w fazie z sumą (M′). S = Σ ±G_b·pasmo_b (znaki naprzemienne, pasmo basowe i najwyższe pominięte), a potem para Hilberta. Ponieważ każde pasmo jest w fazie z M′, S pozostaje w kwadraturze także przy zmiennych w czasie wzmocnieniach G_b.
+- **Keep Mono:** G_b = √(udział otoczenia w paśmie b). Estymator bez latencji (co 32 próbki): obwiednia energii 10 ms; *ogon* = max(ogon·spadek T60, κ·E), T60 = 0,6 s, κ = 0,1 (−10 dB) **[kalibracja]** (model zaniku pogłosu, Lebart i in. 2001); *faza zaniku*: spadek E poniżej szczytu (który sam opada z T60) — 3 dB → bezpośredni, 9 dB → otoczenie; *tło* (room tone) = minimum z okien 0,8 s (minimum statistics, Martin 2001) × 2. Udział = max(faza zaniku, (ogon + tło)/E), wygładzany 15 ms. Test (syntetyczny dialog: sylaby + pogłos T60 0,6 s + tło −40 dB): korelacja L/P głosu 0,97 (mono), otoczenia 0,89 (pełne poszerzanie: 0,85); suma mono identyczna jak bez Keep Mono (≤ −100 dB). Starsze sesje otwierają się z Keep Mono OFF (brzmią jak w 1.3).
 - Poszerzanie mono powyżej 100 % (punkt 3.3) używa tego samego Stereoizera; w trybie Headphones dwa wirtualne źródła rozstawia się o ±30°·Width jak dla stereo. Koszt: ok. 0,5 % rdzenia przy 48 kHz.
+
+### 3.2d Proximity
+Położenie słuchacza/mikrofonu w pomieszczeniu: x = W·(0,5 − 0,8·max(0, p − 0,5)), y = L·(0,5 − 0,4·p). p = 0 → środek (odbicia późne i równomierne), p = 0,5 → dotychczasowa pozycja (środek szerokości, 30 % długości), p = 1 → okolice narożnika (silne odbicia tuż po dźwięku bezpośrednim; odpowiednik „Proximity” w pogłosach filmowych). Test: energia odbić 0–20 ms względem 20–80 ms rośnie o > 3 dB przy p = 1.
+
+### 3.2e Surround i Atmos (5.0 … 7.1.4)
+Układy: 5.0, 5.1, 7.0, 7.1, 5.1.2, 5.1.4, 7.1.2, 7.1.4 (oraz LCR), z wejścia mono, stereo albo tego samego układu. Pozycje głośników wg ITU-R BS.775 i łóżek Dolby Atmos (L/R ±30°, Ls/Rs ±110°, boczne ±90°, tylne ±150°, górne ±45°/±135° lub ±90° przy elewacji 45°).
+- **Dźwięk bezpośredni:** panoramowanie parami ze stałą mocą (zasada Pulkkiego) po przodzie L–C–R (Pan ±100 → ±30°), więc wyśrodkowane źródło mono jest w kanale C (konwencja dialogu). Źródła stereo zachowują obraz L/R; szerokość (S) idzie na L/R. Time Pan, Mono-safe i Headphones nie dotyczą wyjść wielokanałowych.
+- **Pomieszczenie:** każde odbicie jest panoramowane po pierścieniu głośników wg swojego kierunku (ściany boczne i tylna → surroundy, sufit → warstwa wysokościowa). Każdy kanał ma własny klaster dyfuzji i własny ortogonalny wiersz macierzy Hadamarda z 16 linii FDN. Moc ogona: C −6 dB, wysokościowe −1,5 dB, LFE 0; suma energii równa stereo (test: ±1 dB), więc DRR i Auto Gain są takie same jak w stereo.
+- **Mono Depth** w surround: całość w kanale C. **Bypass:** mono → C, stereo → L/R, wejście wielokanałowe → te same kanały. Wejście wielokanałowe jest składane do źródła stereo (C −3 dB do obu, surroundy i wysokościowe −6 dB), a LFE wejścia przechodzi do LFE wyjścia bez zmian.
+- Testy: `tests/EngineTests.cpp` (14j: routing, stała moc, energia względem stereo, wysokościowe, Mono Depth) oraz `tests/PluginHostTests.cpp` — procesor wtyczki w układach 1.0 … 7.1.4 (routing, LFE, bypass, migracja stanu), uruchamiany w CI.
 
 ### 3.3 Szerokość
 Dla źródeł stereo S jest mnożone przez Width. Źródła mono powyżej 100 % poszerza Stereoizer (punkt 3.2c): S w kwadraturze do M′, a = 1,0·(Width − 1) **[kalibracja]**, więc każdy kanał ma płaską charakterystykę, a suma mono zachowuje moduł źródła. Wcześniejszy dekorelator z all-passów Schroedera (Kendall 1995) dawał w każdym kanale filtr grzebieniowy ok. ±5 dB (efekt phasera) i został usunięty. Bass Mono to filtr górnoprzepustowy LR4 (2 × SVF Butterwortha) na S.
@@ -143,6 +155,8 @@ Model deterministyczny: przewidywana zmiana głośności ważonej krzywą K (BS.
 | monoDepth | Mono Depth | Off/On | Off | przełącznik |
 | eqAmbience | Equalized Ambience | Off/On | **On** | przełącznik |
 | monoToStereo | Mono to Stereo | Off/On | Off | przełącznik |
+| keepMono | Keep Mono | Off/On | **On** (starsze sesje: Off) | przełącznik |
+| proximity | Proximity | 0–100 % | 50 % | lin. |
 | bypass | Bypass | Off/On | Off | przełącznik (bypass hosta, crossfade 20 ms) |
 
 Przełączniki są zaimplementowane jako dwustanowe parametry wyboru. Ich znormalizowana wartość jest kwantowana, więc odtworzony stan jest dokładny (wymóg pluginval). Stan wtyczki ma atrybut `stateVersion` (obecnie 2) oraz przechowuje skalę UI i nazwę presetu. Parametry, których nie ma w zapisanym stanie (np. dodane w nowszej wersji), dostają wartości domyślne.
@@ -166,16 +180,17 @@ Przełączniki są zaimplementowane jako dwustanowe parametry wyboru. Ich znorma
 | 13. Neutralność, latencja 0 | ✅ (null ≤ −120 dBFS) |
 | pluginval, strictness 10 | ✅ |
 | Walidator VST3 Steinberga | ✅ 47/47 |
-| CPU (48 kHz, stereo, maszyna wirtualna Linux x64, samo przetwarzanie) | ok. 0,35 % rdzenia (Room Off), ok. 2,1 % (Medium A), ok. 0,85 % (Mono → Stereo) |
+| CPU (48 kHz, stereo, maszyna wirtualna Linux x64, samo przetwarzanie) | ok. 0,4 % rdzenia (Room Off), ok. 2,3 % (Medium A), ok. 1,5 % (Mono → Stereo, bank 8 pasm) |
 
 Oba wyniki mieszczą się w celach (≤ 1 % i ≤ 3 %). Pomiar pochodzi z maszyny wirtualnej w chmurze i jest informacyjny — należy go powtórzyć na docelowym sprzęcie (`ambience_tests`, test 15).
 
 ## 6. Ograniczenia i znane odstępstwa
 - Interpolacja Lagrange'a 3. rzędu tłumi najwyższe częstotliwości przy opóźnieniach ułamkowych (przy 48 kHz spadek rośnie powyżej ok. 14 kHz: kilka dB przy 18 kHz, więcej bliżej Nyquista). Dotyczy to ucha dalszego w trybie Headphones, Time Pan przy wyłączonym Mono-safe i Dopplera. Przy fs ≥ 88,2 kHz efekt jest poza pasmem.
 - Model głowy jest sferyczny (bez małżowiny i ramion), więc nie daje wskazówek przód/tył ani elewacji. HRTF z plików SOFA to punkt COULD (niezrealizowany).
-- W trybie Headphones wczesne odbicia są panoramowane amplitudowo (bez modelu głowy).
+- Tryb Headphones: odbicia mają ITD (Woodworth, z kompensacją fazy półki cienia jak dla dźwięku bezpośredniego; test: 0,646 ms poniżej 700 Hz) i cień głowy (wspólny filtr górnoprzepustowy na ucho, dokładny dla półki 1. rzędu), a oba uszy słyszą ten sam klaster dyfuzji. Ogon: sygnał S górnoprzepustowy 400 Hz (naturalna spójność basu w polu rozproszonym; Menzer i Faller 2009; test: korelacja < 150 Hz 0,99 wobec 0,74). Model nie uwzględnia elewacji.
+- Dekorelator z szumu aksamitnego (velvet noise; Alary, Politis i Välimäki 2017) sprawdzono jako zamiennik all-passów w klastrach odbić: przy długości 8–12 ms i 20–80 impulsach daje zafalowanie tercjowe 4–7 dB (all-passy: 0,1 dB), więc pozostawiono all-passy. Szum aksamitny sprawdza się przy dłuższych dekorelatorach i syntezie ogona, nie przy krótkich klastrach odbić.
 - Wartości materiałów, pomieszczeń i dekorelacji wymagają kalibracji odsłuchowej w reżyserce (patrz scenariusze w README).
-- Formaty wielokanałowe (5.1/7.1/Atmos) nie są obsługiwane. Panner jest osobnym modułem, co pozwala je dodać.
+- Obiekty Atmos (ADM) i formaty ambisoniczne nie są obsługiwane — tylko łóżka kanałowe do 7.1.4.
 - AAX nie jest budowany (wymaga AAX SDK i podpisu PACE) — patrz README.
 - Przy automatyce odległości opóźnienia odbić zmieniają się płynnie (fizycznie poprawny, lekki Doppler odbić przy szybkich ruchach), a dźwięk bezpośredni nie ma Dopplera, dopóki *Propagation Delay* jest wyłączone.
 - Źródło znacznie dalej niż wymiary pomieszczenia (np. 50 m w kościele 50 × 20 m) ma geometrię odbić przyciętą do wnętrza; siła filtra grzebieniowego jest wtedy umiarkowana (0,22, test 14f mierzy do 10 m).

@@ -545,8 +545,8 @@ void AmbienceEditor::layoutContent()
     }
     right.removeFromTop (8);
     outputCard.setBounds (right);
-    monoToStereoToggle.setBounds (right.getRight() - 142, right.getY() + 4, 136, 22);
-    keepMonoToggle.setBounds (right.getRight() - 142 - 112, right.getY() + 4, 108, 22);
+    monoToStereoToggle.setBounds (right.getRight() - 112 - 140, right.getY() + 4, 136, 22);
+    keepMonoToggle.setBounds (right.getRight() - 112, right.getY() + 4, 106, 22);
     {
         auto k = right.reduced (12, 0).withTrimmedTop (26).withTrimmedBottom (10);
         outputKnob.setBounds (k.removeFromLeft (84));
