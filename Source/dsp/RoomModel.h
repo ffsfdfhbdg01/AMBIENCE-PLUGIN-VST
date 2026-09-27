@@ -4,8 +4,6 @@
 // ISO 9613-1 air absorption). Deterministic: fixed delays, no random modulation.
 #pragma once
 
-#include <map>
-#include <mutex>
 
 #include "AcousticModels.h"
 
@@ -27,6 +25,7 @@ struct RoomSpec
     double t60;                   // s, mid frequencies
     double hfRatio;               // T60(high) / T60(mid)
     double tailScale;             // diffuse level scale (open spaces lose energy upwards)
+    double bassRatio = 1.0;       // T60(125-250 Hz) / T60(mid) (Beranek's bass ratio)
 };
 
 // Variant convention: A = neutral, B = damped / furnished, C = live / hard surfaces.
@@ -44,13 +43,13 @@ inline const RoomSpec& roomSpec (int type) noexcept
         { "Small C (tiled)", K::room, 3.0, 2.5, 2.4, 0.9, 0.8, 1 },
         { "Medium A", K::room, 7.0, 6.5, 3.3, 0.6, 0.5, 1 },
         { "Medium B (furnished)", K::room, 6.0, 5.0, 2.7, 0.45, 0.45, 1 },
-        { "Medium C (empty)", K::room, 9.0, 7.0, 3.2, 1.0, 0.7, 1 },
-        { "Large A", K::room, 12.0, 12.0, 4.2, 0.9, 0.5, 1 },
-        { "Large B (studio)", K::room, 15.0, 12.0, 6.0, 0.7, 0.45, 1 },
-        { "Large C (warehouse)", K::room, 30.0, 20.0, 8.0, 2.2, 0.6, 1 },
-        { "Hall A", K::room, 25.0, 20.0, 10.0, 1.8, 0.45, 1 },
-        { "Hall B (theatre)", K::room, 30.0, 22.0, 12.0, 1.3, 0.5, 1 },
-        { "Hall C (church)", K::room, 50.0, 20.0, 20.0, 4.0, 0.55, 1 },
+        { "Medium C (empty)", K::room, 9.0, 7.0, 3.2, 1.0, 0.7, 1, 1.1 },
+        { "Large A", K::room, 12.0, 12.0, 4.2, 0.9, 0.5, 1, 1.1 },
+        { "Large B (studio)", K::room, 15.0, 12.0, 6.0, 0.7, 0.45, 1, 0.95 },
+        { "Large C (warehouse)", K::room, 30.0, 20.0, 8.0, 2.2, 0.6, 1, 1.2 },
+        { "Hall A", K::room, 25.0, 20.0, 10.0, 1.8, 0.45, 1, 1.2 },
+        { "Hall B (theatre)", K::room, 30.0, 22.0, 12.0, 1.3, 0.5, 1, 1.1 },
+        { "Hall C (church)", K::room, 50.0, 20.0, 20.0, 4.0, 0.55, 1, 1.3 },
     };
     constexpr int n = (int) (sizeof (specs) / sizeof (specs[0]));
     return specs[std::clamp (type, 0, n - 1)];
@@ -72,6 +71,30 @@ inline int migrateRoomIndexV1 (int oldIndex) noexcept
     return map[std::clamp (oldIndex, 0, 5)];
 }
 
+namespace detail
+{
+    // Sign of entry (row, col) of the Sylvester-Hadamard matrix.
+    constexpr int hadamardSign (int row, int col) noexcept
+    {
+        int v = row & col, parity = 0;
+        while (v != 0)
+        {
+            parity ^= v & 1;
+            v >>= 1;
+        }
+        return parity != 0 ? -1 : 1;
+    }
+
+    template <int N>
+    constexpr std::array<float, N> hadamardRow (int row) noexcept
+    {
+        std::array<float, N> r {};
+        for (int i = 0; i < N; ++i)
+            r[(size_t) i] = (float) hadamardSign (row, i);
+        return r;
+    }
+} // namespace detail
+
 class RoomModel
 {
 public:
@@ -83,7 +106,7 @@ public:
         allocate (sampleRate);
         // Reference IR energies per room type for normalisation (done off the audio thread,
         // computed once per sample rate and shared by all instances).
-        refEnergy = referenceEnergies (fs);
+        refData = referenceData();
         configure (roomOff, 1.0);
         reset();
     }
@@ -95,7 +118,17 @@ public:
             l.reset();
         for (auto& v : airState)
             v = 0.0f;
+        for (int i = 0; i < numLines; ++i)
+        {
+            auto& o = lfo[(size_t) i];
+            const double phase = kTwoPi * i / numLines * 5.0; // spread start phases
+            o.c = (float) std::cos (phase);
+            o.s = (float) std::sin (phase);
+            o.x1 = o.y1 = 0.0f;
+        }
         for (auto& f : shelf)
+            f.reset();
+        for (auto& f : lowShelf)
             f.reset();
         for (auto& d : inDiffuser)
             d.reset();
@@ -121,7 +154,7 @@ public:
             const double mfpTime = 4.0 * V / S / kSpeedOfSound; // mean free path time (Kuttruff)
             // Line lengths spread over 1 : 2.3 around the mean free path, rounded to primes
             // (no common factors -> no periodic build-up; Jot & Chaigne 1991).
-            const double d0 = std::clamp (0.75 * mfpTime, 0.005, 0.035);
+            const double d0 = std::clamp (0.75 * mfpTime, 0.012, 0.035); // >= 12 ms: enough modal density in small rooms
             static const double jitter[numLines] = { 0, 0.013, -0.009, 0.017, -0.012, 0.006, -0.015, 0.011,
                                                      -0.004, 0.014, -0.011, 0.008, -0.016, 0.012, -0.007, 0.0 };
             int prev = 0;
@@ -174,19 +207,25 @@ public:
                                                             - models::airAbsorptionDbPerMetre (1000.0, 20.0, 50.0));
         const double wShelf = kTwoPi * 2500.0;
         const double cShelf = wShelf / std::tan (wShelf / (2.0 * fs));
+        const double t60lf = t60 * s.bassRatio;
+        const double wLow = kTwoPi * 250.0;
+        const double cLow = wLow / std::tan (wLow / (2.0 * fs));
         for (int i = 0; i < numLines; ++i)
         {
             const double secs = delays[(size_t) i] / fs;
             lineGain[(size_t) i] = (float) std::pow (10.0, -3.0 * secs / t60);
             const double hfGain = std::pow (10.0, -3.0 * secs * (1.0 / t60hf - 1.0 / t60));
             shelf[(size_t) i].setAnalog (hfGain / wShelf, 1.0, 1.0 / wShelf, 1.0, cShelf);
+            // Low shelf (DC gain lfGain, unity above ~250 Hz): longer bass decay in large rooms.
+            const double lfGain = std::pow (10.0, -3.0 * secs * (1.0 / t60lf - 1.0 / t60));
+            lowShelf[(size_t) i].setAnalog (1.0 / wLow, lfGain, 1.0 / wLow, 1.0, cLow);
             airCoeff[(size_t) i] = (float) onePoleForGain (8000.0, std::pow (10.0, -airExtraDbPerSecond * secs / 20.0));
         }
         const double V = s.width * s.length * s.height;
         const double S = 2.0 * (s.width * s.length + s.width * s.height + s.length * s.height);
         wallReflection = std::sqrt (std::clamp (1.0 - 0.161 * V / (S * t60), 0.05, 0.95)); // Sabine mean absorption
         criticalDist = models::criticalDistance (V, t60);
-        tailNorm = s.tailScale / std::sqrt (refEnergy[(size_t) roomType] * decay);
+        tailNorm = s.tailScale / std::sqrt (refData[(size_t) roomType].energy * decay);
     }
 
     double criticalDistance() const noexcept { return criticalDist; }
@@ -346,7 +385,23 @@ public:
             float s[numLines], fb[numLines];
             for (int i = 0; i < numLines; ++i)
             {
-                const float v = shelf[(size_t) i].process (lines[(size_t) i].at (delays[(size_t) i] - 1)) * lineGain[(size_t) i];
+                // Slow, subtle delay modulation (deterministic quadrature oscillators, distinct rates):
+                // time-variation smears the fixed resonances of the network, so long tails do not
+                // ring metallically (cf. Lexicon "spin/wander", Dattorro 1997). Pitch deviation < 2.5 cents.
+                auto& o = lfo[(size_t) i];
+                const float c = o.c * o.cr - o.s * o.sr, sn = o.s * o.cr + o.c * o.sr;
+                o.c = c;
+                o.s = sn;
+                // Fractional read with a first-order all-pass interpolator (flat magnitude, cheap).
+                const float d = (float) (delays[(size_t) i] - 1) - modDepth * (1.0f + sn);
+                const int di = (int) d;
+                const float frac = d - (float) di;
+                const float ap = (1.0f - frac) / (1.0f + frac);
+                const float xin = lines[(size_t) i].at (di);
+                const float tap = flushDenormal (ap * (xin - o.y1) + o.x1);
+                o.x1 = xin;
+                o.y1 = tap;
+                const float v = lowShelf[(size_t) i].process (shelf[(size_t) i].process (tap)) * lineGain[(size_t) i];
                 const float a = airCoeff[(size_t) i];
                 airState[(size_t) i] = flushDenormal (v + a * (airState[(size_t) i] - v));
                 s[i] = fb[i] = airState[(size_t) i];
@@ -359,13 +414,15 @@ public:
                         fb[j] = u + w;
                         fb[j + h] = u - w;
                     }
+            static constexpr auto inSign = detail::hadamardRow<numLines> (inRow), lSign = detail::hadamardRow<numLines> (lRow),
+                                  rSign = detail::hadamardRow<numLines> (rRow), mSign = detail::hadamardRow<numLines> (mRow);
             float tL = 0, tR = 0, tM = 0;
             for (int i = 0; i < numLines; ++i)
             {
-                lines[(size_t) i].push ((fb[i] + (float) hadamardSign (inRow, i) * in) * 0.25f);
-                tL += (float) hadamardSign (lRow, i) * s[i];
-                tR += (float) hadamardSign (rRow, i) * s[i];
-                tM += (float) hadamardSign (mRow, i) * s[i];
+                lines[(size_t) i].push ((fb[i] + inSign[(size_t) i] * in) * 0.25f);
+                tL += lSign[(size_t) i] * s[i];
+                tR += rSign[(size_t) i] * s[i];
+                tM += mSign[(size_t) i] * s[i];
             }
             outL += tL * 0.25f;
             outR += tR * 0.25f;
@@ -378,15 +435,27 @@ public:
             silentCounter = 0;
     }
 
-    // Energy of the reverb (ER + tail) relative to unit input energy, for the auto gain model.
-    double predictedEnergy() const noexcept
+    // Energy gain (L + R) of the reverb (ER + tail) at frequency f relative to the input, for the
+    // model-based auto gain: reflections through their low-pass (the diffusers are all-passes),
+    // tail from its measured, normalised spectrum.
+    double predictedEnergy (double f) const noexcept
     {
+        if (roomType == roomOff)
+            return 0.0;
         double e = 0;
         const int nRefl = roomSpec (roomType).kind == RoomKind::openField ? 1 : numReflections;
         for (int i = 0; i < nRefl; ++i)
             e += er[(size_t) i].gainL.target * er[(size_t) i].gainL.target + er[(size_t) i].gainR.target * er[(size_t) i].gainR.target;
+        const double a = erLpCoeff, cw = std::cos (kTwoPi * std::min (f, 0.49 * fs) / fs);
+        e *= (1.0 - a) * (1.0 - a) / (1.0 - 2.0 * a * cw + a * a);
         if (roomHasTail (roomType))
-            e += fdnGain.target * fdnGain.target;
+        {
+            const auto& ref = refData[(size_t) roomType];
+            const double pos = std::clamp (std::log2 (f / bandCentre (0)), 0.0, (double) (numBands - 1));
+            const int i0 = std::min ((int) pos, numBands - 2);
+            const double shapeDb = lerp (ref.shapeDb[(size_t) i0], ref.shapeDb[(size_t) i0 + 1], pos - i0);
+            e += fdnGain.target * fdnGain.target * ref.energy * std::pow (10.0, shapeDb / 10.0);
+        }
         return e;
     }
 
@@ -440,18 +509,8 @@ private:
     };
 
     static constexpr double floorFactor = 0.6; // listening calibration
+    static constexpr double modDepthMs = 0.5;  // peak-to-peak line modulation (tail spectrum close to Gaussian noise)
     static constexpr int inRow = 5, lRow = 3, rRow = 6, mRow = 12; // Sylvester-Hadamard rows (orthogonal, zero-sum)
-    static constexpr int hadamardSign (int row, int col) noexcept
-    {
-        int v = row & col, parity = 0;
-        while (v != 0)
-        {
-            parity ^= v & 1;
-            v >>= 1;
-        }
-        return parity != 0 ? -1 : 1;
-    }
-
     static int nextPrime (int n) noexcept
     {
         auto isPrime = [] (int v)
@@ -498,6 +557,13 @@ private:
     void allocate (double sampleRate)
     {
         fs = sampleRate;
+        modDepth = (float) (modDepthMs * 1.0e-3 * fs * 0.5);
+        for (int i = 0; i < numLines; ++i)
+        {
+            const double rate = 0.15 + 0.65 * i / (numLines - 1) * (i % 2 == 0 ? 1.0 : 0.93); // 0.15 - 0.8 Hz
+            lfo[(size_t) i].cr = (float) std::cos (kTwoPi * rate / fs);
+            lfo[(size_t) i].sr = (float) std::sin (kTwoPi * rate / fs);
+        }
         input.prepare ((int) std::ceil (0.80 * fs));
         for (auto& l : lines)
             l.prepare ((int) std::ceil (0.10 * fs));
@@ -508,37 +574,60 @@ private:
                 d.prepare ((int) std::ceil (0.007 * fs));
     }
 
-    static std::array<double, numRoomTypes> referenceEnergies (double sampleRate)
+    static constexpr int numBands = 10; // octave bands 31.5 Hz - 16 kHz
+    static double bandCentre (int b) noexcept { return 31.25 * std::pow (2.0, b); }
+
+    struct RefData
     {
-        static std::mutex mutex;
-        static std::map<long long, std::array<double, numRoomTypes>> cache;
-        const std::lock_guard<std::mutex> lock (mutex);
-        const auto key = (long long) std::llround (sampleRate);
-        if (auto it = cache.find (key); it != cache.end())
-            return it->second;
-        RoomModel probe;
-        probe.allocate (sampleRate);
-        probe.refEnergy.fill (1.0);
-        std::array<double, numRoomTypes> e {};
-        for (int t = 0; t < numRoomTypes; ++t)
-            e[(size_t) t] = roomHasTail (t) ? probe.measureTailEnergy (t) : 1.0;
-        cache[key] = e;
-        return e;
+        double energy = 1.0;                // L+R tail energy gain in 500 Hz - 2 kHz for unit FDN gain
+        std::array<double, numBands> shapeDb {}; // octave-band tail energy relative to that band
+    };
+
+    // Measured once per process at 48 kHz (the values are ratios to a unit impulse and do not depend
+    // on the sample rate), so preparing at 96 or 192 kHz costs nothing extra.
+    static std::array<RefData, numRoomTypes> referenceData()
+    {
+        static const std::array<RefData, numRoomTypes> data = []
+        {
+            RoomModel probe;
+            probe.allocate (48000.0);
+            std::array<RefData, numRoomTypes> d {};
+            probe.refData = d;
+            for (int t = 0; t < numRoomTypes; ++t)
+                if (roomHasTail (t))
+                    d[(size_t) t] = probe.measureTail (t);
+            return d;
+        }();
+        return data;
     }
 
-    // Tail IR energy (sum over L+R) for unit input gain in the mid band (500 Hz - 2 kHz, relative to
-    // a unit impulse), used to normalise the tail so its level equals the diffuse-field target
-    // where the critical-distance model applies; the frequency-dependent decay then only darkens
-    // the top instead of lifting the rest.
-    double measureTailEnergy (int type)
+    // Tail IR energy (sum over L+R) for unit FDN gain, relative to a unit impulse, in the mid band
+    // (500 Hz - 2 kHz) and in octave bands. The mid-band value normalises the tail so its level
+    // equals the diffuse-field target where the critical-distance model applies (the frequency-
+    // dependent decay then only darkens the top); the band shape feeds the auto gain model.
+    RefData measureTail (int type)
     {
-        Biquad hp1, hp2, lp1, lp2;
-        hp1.set (designBiquadHz (BiquadType::highPass, fs, 500.0, 0.7071, 0.0));
-        hp2 = hp1;
-        lp1.set (designBiquadHz (BiquadType::lowPass, fs, 2000.0, 0.7071, 0.0));
-        lp2 = lp1;
-        auto band = [&] (Biquad (&f)[4], float x) { return f[3].process (f[2].process (f[1].process (f[0].process (x)))); };
-        Biquad fl[4] = { hp1, hp2, lp1, lp2 }, fr[4] = { hp1, hp2, lp1, lp2 }, fi[4] = { hp1, hp2, lp1, lp2 };
+        struct BandPass
+        {
+            Biquad f[4];
+            BandPass (double sr, double lo, double hi)
+            {
+                f[0].set (designBiquadHz (BiquadType::highPass, sr, lo, 0.7071, 0.0));
+                f[1] = f[0];
+                f[2].set (designBiquadHz (BiquadType::lowPass, sr, std::min (hi, 0.45 * sr), 0.7071, 0.0));
+                f[3] = f[2];
+            }
+            float process (float x) noexcept { return f[3].process (f[2].process (f[1].process (f[0].process (x)))); }
+        };
+        // [band][signal]: 0 = L, 1 = R, 2 = reference impulse; band numBands = mid band.
+        std::vector<std::array<BandPass, 3>> bp;
+        for (int b = 0; b <= numBands; ++b)
+        {
+            const double lo = b < numBands ? bandCentre (b) / std::sqrt (2.0) : 500.0;
+            const double hi = b < numBands ? bandCentre (b) * std::sqrt (2.0) : 2000.0;
+            bp.push_back ({ BandPass (fs, lo, hi), BandPass (fs, lo, hi), BandPass (fs, lo, hi) });
+        }
+        std::vector<double> energy ((size_t) numBands + 1, 0.0), reference ((size_t) numBands + 1, 0.0);
 
         configure (type, 1.0);
         reset();
@@ -549,20 +638,32 @@ private:
             e.gainL.cur = e.gainR.cur = 0;
             e.gainL.target = e.gainR.target = 0;
         }
-        const int len = (int) (roomSpec (type).t60 * 1.6 * fs);
-        double energy = 0, reference = 0;
+        // Energy is integrated to ~-55 dB (0.9 T60 at the slowest band, allowing for the bass ratio);
+        // the band-pass reference needs only a short impulse response.
+        const int len = (int) (roomSpec (type).t60 * std::max (1.0, roomSpec (type).bassRatio) * 0.95 * fs);
+        const int refLen = (int) (0.25 * fs);
         for (int n = 0; n < len; ++n)
         {
             float l, r;
             const float x = n == 0 ? 1.0f : 0.0f;
             process (x, l, r);
-            l = band (fl, l);
-            r = band (fr, r);
-            const float ref = band (fi, x);
-            energy += (double) l * l + (double) r * r;
-            reference += (double) ref * ref;
+            for (size_t b = 0; b < bp.size(); ++b)
+            {
+                const float bl = bp[b][0].process (l), br = bp[b][1].process (r);
+                energy[b] += (double) bl * bl + (double) br * br;
+                if (n < refLen)
+                {
+                    const float bi = bp[b][2].process (x);
+                    reference[b] += (double) bi * bi;
+                }
+            }
         }
-        return std::max (energy / std::max (reference, 1.0e-12), 1.0e-9);
+        RefData d;
+        auto ratio = [&] (size_t b) { return std::max (energy[b] / std::max (reference[b], 1.0e-12), 1.0e-9); };
+        d.energy = ratio ((size_t) numBands);
+        for (int b = 0; b < numBands; ++b)
+            d.shapeDb[(size_t) b] = 10.0 * std::log10 (ratio ((size_t) b) / d.energy);
+        return d;
     }
 
     double fs = 48000.0;
@@ -572,11 +673,18 @@ private:
     std::array<DelayLine, numLines> lines;
     std::array<int, numLines> delays {};
     std::array<float, numLines> lineGain {}, airCoeff {}, airState {};
-    std::array<FirstOrder, numLines> shelf {};
+    std::array<FirstOrder, numLines> shelf {}, lowShelf {};
+    struct Lfo
+    {
+        float c = 1, s = 0, cr = 1, sr = 0;
+        float x1 = 0, y1 = 0; // all-pass interpolator state
+    };
+    std::array<Lfo, numLines> lfo {};
+    float modDepth = 0.0f;
     std::array<Diffuser, 4> inDiffuser;
     std::array<std::array<Diffuser, 3>, 3> erDiffuser;
     std::array<Reflection, numReflections> er {};
-    std::array<double, numRoomTypes> refEnergy {};
+    std::array<RefData, numRoomTypes> refData {};
     Ramp fdnGain, fdnInDelay;
     double wallReflection = 0.8, criticalDist = 1.0, tailNorm = 1.0;
     double erWallCoeff = 0.45;

@@ -57,8 +57,9 @@ wejście (1 lub 2 kanały)
   | Hall A / B / C | 25×20×10 / 30×22×12 / 50×20×20 | 1,8 / 1,3 / 4,0 | 0,45 / 0,5 / 0,55 | B = teatr, C = kościół |
 
   Stan w wersji 1 miał 6 przestrzeni (Off, Outdoor, Small, Medium, Large, Hall). Przy wczytywaniu projektu lub presetu z v1 indeks jest mapowany na warianty A (`migrateRoomIndexV1`, `stateVersion` = 2).
-- **FDN:** 16 linii o długościach będących liczbami pierwszymi, rozłożonych w stosunku 1 : 2,3 wokół czasu średniej drogi swobodnej (0,75·4V/(S·c), 5–35 ms). Macierz sprzężenia: znormalizowana macierz Hadamarda 16×16 (szybka transformata Walsha-Hadamarda) — każda linia zasila wszystkie pozostałe po równo. Macierz Householdera tej wielkości zostawia w każdej linii 7/8 jej własnego sygnału, więc linie dzwonią jak osobne filtry grzebieniowe. Wejście przechodzi przez filtr ściany i 4 all-passy dyfuzyjne (1,3–5,3 ms × skala pomieszczenia), a ogon startuje od **pierwszego** odbicia (pole rozproszone narasta od początku, bez „dziury” przed ogonem). Wyjścia L, P i mono to ortogonalne wiersze macierzy Hadamarda. Brak modulacji (determinizm).
-- **Zanik zależny od częstotliwości:** w każdej linii (Jot) wzmocnienie dla T60 średnich, półka wysoka 1. rzędu 2,5 kHz dla ścian (T60·HF ratio) oraz jednobiegunowy filtr **pochłaniania powietrza** dopasowany przy 8 kHz do α(8 kHz) − α(1 kHz) wg ISO 9613-1 (20 °C, 50 %) na czas przelotu linii. W dużych wnętrzach powietrze dominuje w górnych oktawach: kościół (T60 4 s) ma T30 ≈ 1,3 s przy 8 kHz i ≈ 0,7 s przy 16 kHz (wcześniej 3,3 s / 2,6 s, co dawało „syczący”, biały ogon). Pomiary (T30 per oktawa, gęstość ech wg Abela i Huanga, widmo ogona, siła filtra grzebieniowego) są testami regresji: `tests/EngineTests.cpp`, test 14f.
+- **FDN:** 16 linii o długościach będących liczbami pierwszymi, rozłożonych w stosunku 1 : 2,3 wokół czasu średniej drogi swobodnej (0,75·4V/(S·c), 12–35 ms; dolna granica zapewnia gęstość modów w małych pokojach). Macierz sprzężenia: znormalizowana macierz Hadamarda 16×16 (szybka transformata Walsha-Hadamarda) — każda linia zasila wszystkie pozostałe po równo. Macierz Householdera tej wielkości zostawia w każdej linii 7/8 jej własnego sygnału, więc linie dzwonią jak osobne filtry grzebieniowe. Wejście przechodzi przez filtr ściany i 4 all-passy dyfuzyjne (1,3–5,3 ms × skala pomieszczenia), a ogon startuje od **pierwszego** odbicia (pole rozproszone narasta od początku, bez „dziury” przed ogonem). Wyjścia L, P i mono to ortogonalne wiersze macierzy Hadamarda.
+- **Modulacja:** każda linia ma powolną, subtelną modulację długości (0,5 ms międzyszczytowo, 16 różnych częstotliwości 0,15–0,8 Hz, deterministyczne oscylatory kwadraturowe, odczyt przez interpolator all-pass 1. rzędu — płaski moduł). Zmienność w czasie rozmywa stałe rezonanse sieci, więc długie ogony nie dzwonią metalicznie (Lexicon „spin/wander”, Dattorro 1997; Schlecht i Habets 2015). Odchylenie wysokości < 2,5 centa. Efekt: rozrzut widma ogona 6–7 dB zamiast do 12,6 dB (idealny szum gaussowski: 5,6 dB). Wynik pozostaje deterministyczny i niezależny od bufora.
+- **Zanik zależny od częstotliwości:** w każdej linii (Jot) wzmocnienie dla T60 średnich, półka niska 1. rzędu 250 Hz dla **bass ratio** (Beranek: T60 basu/T60 średnich — 1,1–1,3 w salach, kościele i hali, 0,95 w studiu, 1,0 w małych pokojach), półka wysoka 1. rzędu 2,5 kHz dla ścian (T60·HF ratio) oraz jednobiegunowy filtr **pochłaniania powietrza** dopasowany przy 8 kHz do α(8 kHz) − α(1 kHz) wg ISO 9613-1 (20 °C, 50 %) na czas przelotu linii. W dużych wnętrzach powietrze dominuje w górnych oktawach: kościół (T60 4 s) ma T30 ≈ 1,3 s przy 8 kHz i ≈ 0,7 s przy 16 kHz (wcześniej 3,3 s / 2,6 s, co dawało „syczący”, biały ogon). Pomiary (T30 per oktawa, gęstość ech wg Abela i Huanga, widmo ogona, siła filtra grzebieniowego) są testami regresji: `tests/EngineTests.cpp`, test 14f.
 - **Efekt zbliżeniowy:** stosunek odpowiedzi mikrofonu gradientowego 1. rzędu w nowej i nagranej odległości, H(s) = (s + B·c/r)/(s + B·c/r_rec), gdzie B to udział składowej gradientowej (omni 0, kardioida 0,5, ósemka 1). Jest to półka ograniczona — przy oddalaniu usuwa podbicie basu z bliskiego nagrania.
 - **Opóźnienie propagacji / Doppler:** linia opóźniająca z interpolacją Lagrange'a 3. rzędu, maks. 1000 m / c ≈ 2,9 s. Nie jest zgłaszane hostowi jako latencja (to efekt, nie kompensacja).
 
@@ -105,7 +106,7 @@ Dla źródeł stereo S jest mnożone przez Width. Źródła mono powyżej 100 % 
 `Thickness` skaluje masę (×k) oraz f_c (÷k). `Leak` 0–100 % odpowiada udziałowi otwartej powierzchni 0–10 % (skala logarytmiczna).
 
 ### 3.5 Auto Gain
-Model deterministyczny: przewidywana zmiana głośności ważonej krzywą K (BS.1770) dla szumu różowego. Na siatce tercjowej sumowane są analityczne charakterystyki toru (odległość, efekt zbliżeniowy, powietrze, przeszkody, panorama/model głowy, energia pomieszczenia, okluzja) i porównywane z mocą wejścia. Źródła stereo zakładają energię S/M = 0,3 **[kalibracja]**. Wynik jest ograniczany do ±`Auto Gain Range` i wygładzany (50 ms). Model liczony jest tylko przy włączonym Auto Gain (co 256 próbek).
+Model deterministyczny: przewidywana zmiana głośności ważonej krzywą K (BS.1770) dla szumu różowego. Na siatce tercjowej sumowane są analityczne charakterystyki toru (odległość, efekt zbliżeniowy, powietrze, przeszkody, panorama/model głowy, energia pomieszczenia, okluzja) i porównywane z mocą wejścia. Źródła stereo zakładają energię S/M = 0,3 **[kalibracja]**. Energia pomieszczenia liczona jest per częstotliwość: odbicia przez ich filtr (ściana + powietrze; dyfuzory są all-passami), ogon z jego widmem zmierzonym oktawowo przy pierwszym `prepare()` (raz na proces, przy 48 kHz). Błąd modelu dla wszystkich 16 przestrzeni i odległości 0,5–150 m: ±0,5 dB (test 14; wcześniej model zawyżał energię pogłosu o 4–8 dB, więc przy włączonym pomieszczeniu wynik był za cichy). Wynik jest ograniczany do ±`Auto Gain Range` i wygładzany (50 ms). Model liczony jest tylko przy włączonym Auto Gain (co 256 próbek).
 
 ## 4. Parametry
 
@@ -165,7 +166,7 @@ Przełączniki są zaimplementowane jako dwustanowe parametry wyboru. Ich znorma
 | 13. Neutralność, latencja 0 | ✅ (null ≤ −120 dBFS) |
 | pluginval, strictness 10 | ✅ |
 | Walidator VST3 Steinberga | ✅ 47/47 |
-| CPU (48 kHz, stereo, maszyna wirtualna Linux x64, samo przetwarzanie) | ok. 0,35 % rdzenia (Room Off), ok. 1,9 % (Medium A), ok. 0,85 % (Mono → Stereo) |
+| CPU (48 kHz, stereo, maszyna wirtualna Linux x64, samo przetwarzanie) | ok. 0,35 % rdzenia (Room Off), ok. 2,1 % (Medium A), ok. 0,85 % (Mono → Stereo) |
 
 Oba wyniki mieszczą się w celach (≤ 1 % i ≤ 3 %). Pomiar pochodzi z maszyny wirtualnej w chmurze i jest informacyjny — należy go powtórzyć na docelowym sprzęcie (`ambience_tests`, test 15).
 
@@ -176,6 +177,18 @@ Oba wyniki mieszczą się w celach (≤ 1 % i ≤ 3 %). Pomiar pochodzi z maszyn
 - Wartości materiałów, pomieszczeń i dekorelacji wymagają kalibracji odsłuchowej w reżyserce (patrz scenariusze w README).
 - Formaty wielokanałowe (5.1/7.1/Atmos) nie są obsługiwane. Panner jest osobnym modułem, co pozwala je dodać.
 - AAX nie jest budowany (wymaga AAX SDK i podpisu PACE) — patrz README.
+- Przy automatyce odległości opóźnienia odbić zmieniają się płynnie (fizycznie poprawny, lekki Doppler odbić przy szybkich ruchach), a dźwięk bezpośredni nie ma Dopplera, dopóki *Propagation Delay* jest wyłączone.
+- Źródło znacznie dalej niż wymiary pomieszczenia (np. 50 m w kościele 50 × 20 m) ma geometrię odbić przyciętą do wnętrza; siła filtra grzebieniowego jest wtedy umiarkowana (0,22, test 14f mierzy do 10 m).
 
 ## 7. Literatura
-Pełna lista: [`PROMPT.md`](../PROMPT.md), sekcja 14. Dodatkowo: Sharp B. H. (1978), *Prediction methods for the sound transmission of building elements*, Noise Control Engineering 11, 53–63; ISO 9613-2 (tabela współczynników); Zavalishin V., *The Art of VA Filter Design* (SVF/TPT).
+Pełna lista: [`PROMPT.md`](../PROMPT.md), sekcja 14. Dodatkowo: Sharp B. H. (1978), *Prediction methods for the sound transmission of building elements*, Noise Control Engineering 11, 53–63; ISO 9613-2 (tabela współczynników); Zavalishin V., *The Art of VA Filter Design* (SVF/TPT). Silnik pomieszczeń i konwersja stereo:
+- Schlecht S. J., Habets E. A. P. (2017). Feedback delay networks: echo density and mixing time. *IEEE/ACM TASLP* 25(2).
+- Schlecht S. J., Habets E. A. P. (2015). Time-varying feedback matrices in feedback delay networks and their application in artificial reverberation. *JASA* 138(3).
+- Prawda K., Välimäki V., Schlecht S. J. (2019). Improved reverberation time control for feedback delay networks. DAFx-19.
+- Dattorro J. (1997). Effect design, part 1: reverberator and other filters. *JAES* 45(9).
+- Abel J. S., Huang P. (2006). A simple, robust measure of reverberation echo density. 121st AES Convention.
+- Alary B., Politis A., Välimäki V. (2017). Velvet-noise decorrelator. DAFx-17.
+- Beranek L. L. (2004). *Concert Halls and Opera Houses* (bass ratio, IACC).
+- Zahorik P., Brungart D. S., Bronkhorst A. W. (2005). Auditory distance perception in humans: a summary of past and present research. *Acta Acustica* 91.
+- Gerzon M. A. (1992). Signal processing for simulating realistic stereo images. 93rd AES Convention; Orban R. (1970). A rational technique for synthesizing pseudo-stereo from monophonic sources. *JAES* 18(2).
+- Niemitalo O. Polyphase IIR Hilbert transformers (współczynniki pary Hilberta).

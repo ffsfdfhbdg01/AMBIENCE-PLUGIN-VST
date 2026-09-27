@@ -513,6 +513,35 @@ int main()
         check (gainToDb (offR * std::sqrt (2.0) / inR) < -12.0, "without auto gain the distance+curtain loss is large");
         // Pink-noise loudness is restored to within a few dB (K-weighting vs plain RMS differ slightly).
         near (gainToDb (onR * std::sqrt (2.0) / inR), 0.0, 3.0, "auto gain restores level (RMS proxy)");
+
+        // With rooms: K-weighted (BS.1770) loudness of the output equals the input within 1 dB.
+        auto kLoudness = [] (const std::vector<float>& y, int from)
+        {
+            Biquad s1, s2;
+            s1.set ({ 1.53512485958697, -2.69169618940638, 1.19839281085285, -1.69065929318241, 0.73248077421585 });
+            s2.set ({ 1.0, -2.0, 1.0, -1.99004745483398, 0.99007225036621 });
+            double e = 0;
+            for (size_t i = 0; i < y.size(); ++i)
+            {
+                const float v = s2.process (s1.process (y[i]));
+                if ((int) i >= from)
+                    e += (double) v * v;
+            }
+            return e;
+        };
+        const auto y = pinkNoise (48000 * 4);
+        for (int room : { 1, 4, 7, 10, 13, 15 })
+            for (float dist : { 2.0f, 12.0f })
+            {
+                EngineParams q;
+                q.room = room;
+                q.distance = dist;
+                q.autoGain = true;
+                q.autoGainRange = 36;
+                const auto o = render (q, { y }, 2);
+                const double change = 10.0 * std::log10 ((kLoudness (o[0], 96000) + kLoudness (o[1], 96000)) / kLoudness (y, 96000));
+                near (change, 0.0, 1.0, std::string ("auto gain with ") + roomSpec (room).name + " at " + std::to_string ((int) dist) + " m");
+            }
     } });
 
     tests.push_back ({ "14b. All 16 room variants render; v1 room migration", [&]
@@ -807,7 +836,8 @@ int main()
                 check (bandEnergy (l, 8000, a, b) < bandEnergy (l, 1000, a, b), name + ": tail darker at 8 kHz than at 1 kHz");
         }
         {
-            // Church: air absorption dominates the top octaves (ISO 9613-1): T30(8 kHz) well below 2 s.
+            // Church: air absorption dominates the top octaves (ISO 9613-1): T30(8 kHz) well below 2 s;
+            // stone and volume give a longer bass decay (bass ratio ~1.3).
             RoomModel rm;
             rm.prepare (fs);
             rm.configure (15, 1.0);
@@ -819,6 +849,8 @@ int main()
                 rm.process (i == 0 ? 1.0f : 0.0f, l[(size_t) i], r[(size_t) i]);
             const double t8k = t30 (octave (l, 8000), octave (r, 8000)), t16k = t30 (octave (l, 16000), octave (r, 16000));
             check (t8k < 1.8 && t16k < 1.1, "church: T30 8 kHz " + std::to_string (t8k) + " s, 16 kHz " + std::to_string (t16k) + " s");
+            const double t125 = t30 (octave (l, 125), octave (r, 125)), t500 = t30 (octave (l, 500), octave (r, 500));
+            check (t125 > 1.15 * t500, "church: bass ratio " + std::to_string (t125 / t500));
         }
         // Comb filtering (phaser/flanger colour): whitened autocorrelation of the first 40 ms of
         // the full engine response at lags 0.3-15 ms. One reflection of relative gain a gives

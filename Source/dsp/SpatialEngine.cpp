@@ -544,13 +544,6 @@ void SpatialEngine::updateAutoGainModel() noexcept
     const double m2sT = rM2SSide.tgt;
     const double speakerPower = GL * GL + GR * GR + 2.0 * ks * ks * (psi * psi * sideEnergy * wsT * wsT + m2sT * m2sT * m2sSidePower);
 
-    double roomPower = 0.0;
-    for (int i = 0; i < 2; ++i)
-    {
-        const double wRoom = i == 1 ? rRoomX.tgt : 1.0 - rRoomX.tgt;
-        roomPower += wRoom * rooms[(size_t) i].predictedEnergy();
-    }
-
     double sumOut = 0.0, sumIn = 0.0;
     for (int k = 0; k < nG; ++k)
     {
@@ -559,6 +552,13 @@ void SpatialEngine::updateAutoGainModel() noexcept
         double hDb = gainToDb (gDist) + prox[0].magnitudeDb (w) + air.currentSectionsDb (k) + air.broadbandDb()
                      + obstruction.currentSectionsDb (k) + obstruction.broadbandDb();
         const double pDirect = std::pow (10.0, hDb / 10.0);
+        double roomPower = 0.0;
+        for (int i = 0; i < 2; ++i)
+        {
+            const double wRoom = i == 1 ? rRoomX.tgt : 1.0 - rRoomX.tgt;
+            if (wRoom > 0.0)
+                roomPower += wRoom * rooms[(size_t) i].predictedEnergy (f);
+        }
 
         double panPower = speakerPower;
         if (rho > 0.0)
