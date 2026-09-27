@@ -130,11 +130,16 @@ public:
             f.reset();
         for (auto& f : lowShelf)
             f.reset();
+        for (auto& f : shadowHp)
+            f.reset();
+        tailSideHp.reset();
         for (auto& d : inDiffuser)
             d.reset();
         for (auto& ch : erDiffuser)
             for (auto& d : ch)
                 d.reset();
+        for (auto& d : erDiffuserEar)
+            d.reset();
         erLpL = erLpR = erLpM = inLp = 0.0f;
         snapGeometry();
     }
@@ -182,6 +187,10 @@ public:
         for (int c = 0; c < 3; ++c)
             for (int k = 0; k < 3; ++k)
                 erDiffuser[(size_t) c][(size_t) k].set ((int) std::round (erMs[c][k] * scale * 1.0e-3 * fs), erG[k]);
+        // Headphones: the right ear hears the same scattering cluster as the left (only delayed and
+        // shadowed), otherwise the interaural time cue of the reflections would be lost.
+        for (int k = 0; k < 3; ++k)
+            erDiffuserEar[(size_t) k].set ((int) std::round (erMs[0][k] * scale * 1.0e-3 * fs), erG[k]);
         static const double inMs[4] = { 1.31, 2.17, 3.73, 5.29 };
         static const float inG[4] = { 0.72f, 0.72f, 0.62f, 0.62f };
         for (int k = 0; k < 4; ++k)
@@ -235,6 +244,9 @@ public:
     void setGeometry (double r, double azimuth, double recDistance, double rolloffExp, double levelLin, int tickLen) noexcept
     {
         const double inv = 1.0 / std::max (tickLen, 1);
+        // Keep the per-ear path running for a few ticks after leaving headphones, until the ramps
+        // towards the loudspeaker targets have finished.
+        binauralTicks = binaural > 0.0 ? 3 : std::max (0, binauralTicks - 1);
         auto ramp = [inv] (Ramp& rp, double target)
         {
             rp.target = target;
@@ -243,12 +255,8 @@ public:
 
         if (roomType == roomOff)
         {
-            for (auto& e : er)
-            {
-                ramp (e.delay, e.delay.cur);
-                ramp (e.gainL, 0.0);
-                ramp (e.gainR, 0.0);
-            }
+            for (int i = 0; i < numReflections; ++i)
+                silenceReflection (i, inv);
             ramp (fdnGain, 0.0);
             ramp (fdnInDelay, fdnInDelay.cur);
             return;
@@ -261,18 +269,10 @@ public:
             const double h = 1.6;
             const double dr = std::sqrt (r * r + 4.0 * h * h);
             const double g = 0.55 * std::pow (recDistance / dr, rolloffExp) * levelLin;
-            double pl, pr;
-            panGains (std::sin (azimuth), pl, pr);
-            ramp (er[0].delay, (dr - r) / kSpeedOfSound * fs);
+            setReflection (0, (dr - r) / kSpeedOfSound * fs, g, azimuth, inv);
             setReflectionAir (dr);
-            ramp (er[0].gainL, g * pl);
-            ramp (er[0].gainR, g * pr);
             for (int i = 1; i < numReflections; ++i)
-            {
-                ramp (er[(size_t) i].delay, er[(size_t) i].delay.cur);
-                ramp (er[(size_t) i].gainL, 0.0);
-                ramp (er[(size_t) i].gainR, 0.0);
-            }
+                silenceReflection (i, inv);
             ramp (fdnGain, 0.0);
             ramp (fdnInDelay, fdnInDelay.cur);
             return;
@@ -303,12 +303,7 @@ public:
             // The floor reflection is partly shadowed and absorbed by furniture, seats and people.
             const double surface = (i == 4 && s.kind == RoomKind::room) ? floorFactor : 1.0;
             const double g = open ? 0.0 : surface * wallReflection * std::pow (recDistance / d, rolloffExp) * levelLin;
-            const double az = std::atan2 (dx, dy);
-            double pl, pr;
-            panGains (std::sin (az), pl, pr);
-            ramp (er[(size_t) i].delay, delaySamples);
-            ramp (er[(size_t) i].gainL, g * pl);
-            ramp (er[(size_t) i].gainR, g * pr);
+            setReflection (i, delaySamples, g, std::atan2 (dx, dy), inv);
             if (! open)
                 firstDelay = std::min (firstDelay, delaySamples);
             meanPath += d / numReflections;
@@ -322,14 +317,19 @@ public:
         ramp (fdnInDelay, firstDelay);
     }
 
+    // Headphones rendering amount (0 = loudspeakers, 1 = binaural): reflections get per-ear delays
+    // (Woodworth / Brown & Duda) and head shadow instead of amplitude panning; the tail gets a
+    // natural interaural coherence at low frequencies. Call before setGeometry().
+    void setBinaural (double amount) noexcept { binaural = std::clamp (amount, 0.0, 1.0); }
+
     void snapGeometry() noexcept
     {
         for (auto& e : er)
-        {
-            e.delay.cur = e.delay.target; e.delay.inc = 0;
-            e.gainL.cur = e.gainL.target; e.gainL.inc = 0;
-            e.gainR.cur = e.gainR.target; e.gainR.inc = 0;
-        }
+            for (Ramp* rp : { &e.delay, &e.delayR, &e.gainL, &e.gainR, &e.shadowL, &e.shadowR })
+            {
+                rp->cur = rp->target;
+                rp->inc = 0;
+            }
         fdnGain.cur = fdnGain.target; fdnGain.inc = 0;
         fdnInDelay.cur = fdnInDelay.target; fdnInDelay.inc = 0;
     }
@@ -350,6 +350,8 @@ public:
         input.push (x);
         float eL = 0, eR = 0, eM = 0;
         const int nRefl = roomSpec (roomType).kind == RoomKind::openField ? 1 : numReflections;
+        const bool ears = binaural > 0.0 || binauralTicks > 0;
+        float shL = 0, shR = 0;
         for (int i = 0; i < nRefl; ++i)
         {
             auto& e = er[(size_t) i];
@@ -357,15 +359,41 @@ public:
             e.gainL.step();
             e.gainR.step();
             const float v = input.read ((float) e.delay.cur);
-            eL += (float) e.gainL.cur * v;
-            eR += (float) e.gainR.cur * v;
             eM += (float) std::sqrt (e.gainL.cur * e.gainL.cur + e.gainR.cur * e.gainR.cur) * v;
+            if (ears)
+            {
+                e.delayR.step();
+                e.shadowL.step();
+                e.shadowR.step();
+                const float vR = input.read ((float) e.delayR.cur);
+                eL += (float) e.gainL.cur * v;
+                eR += (float) e.gainR.cur * vR;
+                shL += (float) e.shadowL.cur * v;
+                shR += (float) e.shadowR.cur * vR;
+            }
+            else
+            {
+                eL += (float) e.gainL.cur * v;
+                eR += (float) e.gainR.cur * v;
+            }
+        }
+        if (ears)
+        {
+            // Head shadow of every reflection: H = 1 + (h - 1) HP1(s) with the Brown & Duda corner,
+            // so one shared first-order high-pass per ear is exact for all reflections.
+            eL += shadowHp[0].process (shL);
+            eR += shadowHp[1].process (shR);
         }
         erLpL = flushDenormal (eL + erLpCoeff * (erLpL - eL));
         erLpR = flushDenormal (eR + erLpCoeff * (erLpR - eR));
         erLpM = flushDenormal (eM + erLpCoeff * (erLpM - eM));
         outL = erDiffuser[0][2].process (erDiffuser[0][1].process (erDiffuser[0][0].process (erLpL)));
         outR = erDiffuser[1][2].process (erDiffuser[1][1].process (erDiffuser[1][0].process (erLpR)));
+        if (ears)
+        {
+            const float same = erDiffuserEar[2].process (erDiffuserEar[1].process (erDiffuserEar[0].process (erLpR)));
+            outR += (float) binaural * (same - outR);
+        }
         outM = erDiffuser[2][2].process (erDiffuser[2][1].process (erDiffuser[2][0].process (erLpM)));
 
         fdnGain.step();
@@ -424,8 +452,21 @@ public:
                 tR += rSign[(size_t) i] * s[i];
                 tM += mSign[(size_t) i] * s[i];
             }
-            outL += tL * 0.25f;
-            outR += tR * 0.25f;
+            tL *= 0.25f;
+            tR *= 0.25f;
+            if (binaural > 0.0 || binauralTicks > 0)
+            {
+                // Binaural diffuse field: both ears receive nearly the same low frequencies (the head
+                // is small against the wavelength; coherence ~ sinc(k d)). The side of the tail is
+                // high-passed at ~400 Hz (Menzer & Faller 2009 principle).
+                const float mid = 0.5f * (tL + tR), side = 0.5f * (tL - tR);
+                const float sideHp = tailSideHp.process (side);
+                const float sd = side + (float) binaural * (sideHp - side);
+                tL = mid + sd;
+                tR = mid - sd;
+            }
+            outL += tL;
+            outR += tR;
             outM += tM * 0.35355339f;
         }
 
@@ -479,8 +520,54 @@ private:
 
     struct Reflection
     {
-        Ramp delay, gainL, gainR;
+        Ramp delay, delayR, gainL, gainR, shadowL, shadowR; // delay = left ear / loudspeakers
     };
+
+    // Reflection targets: loudspeakers (amplitude panning, one delay) blended with headphones (per-ear
+    // delay and head-shadow high-frequency gain h, applied as gain * (h - 1) on the shadow bus).
+    void setReflection (int i, double delaySamples, double g, double az, double inv) noexcept
+    {
+        auto ramp = [inv] (Ramp& rp, double target)
+        {
+            rp.target = target;
+            rp.inc = (target - rp.cur) * inv;
+        };
+        auto& e = er[(size_t) i];
+        double pl, pr;
+        panGains (std::sin (az), pl, pr);
+        const double b = binaural;
+        // Angle between the reflection and each ear axis (left ear at -90 deg, right at +90 deg).
+        auto wrap = [] (double a) { a = std::fmod (std::abs (a), kTwoPi); return a > kPi ? kTwoPi - a : a; };
+        const double thL = wrap (az + kPi / 2), thR = wrap (az - kPi / 2);
+        const double alphaSide = models::headShadowAlpha (kPi / 2);
+        const double hL = models::headShadowAlpha (thL) / alphaSide, hR = models::headShadowAlpha (thR) / alphaSide;
+        const double ear = std::sqrt (0.5);
+        // The shadow shelf's own low-frequency phase delay is removed (as for the direct sound) so the
+        // interaural delay in the ITD-dominant band follows Woodworth.
+        const double wc = 2.0 * kSpeedOfSound / models::kHeadRadius, wRef = kTwoPi * 750.0;
+        auto earDelay = [&] (double theta, double h)
+        { return models::earDelaySeconds (theta) + (std::atan (h * wRef / wc) - std::atan (wRef / wc)) / wRef; };
+        const double dL = earDelay (thL, hL), dR = earDelay (thR, hR), dMin = std::min (dL, dR);
+        ramp (e.delay, delaySamples + b * (dL - dMin + models::earDelaySeconds (0.0)) * fs);
+        ramp (e.delayR, delaySamples + b * (dR - dMin + models::earDelaySeconds (0.0)) * fs);
+        ramp (e.gainL, g * lerp (pl, ear, b));
+        ramp (e.gainR, g * lerp (pr, ear, b));
+        ramp (e.shadowL, g * ear * b * (hL - 1.0));
+        ramp (e.shadowR, g * ear * b * (hR - 1.0));
+    }
+
+    void silenceReflection (int i, double inv) noexcept
+    {
+        auto& e = er[(size_t) i];
+        for (Ramp* rp : { &e.gainL, &e.gainR, &e.shadowL, &e.shadowR })
+        {
+            rp->target = 0.0;
+            rp->inc = -rp->cur * inv;
+        }
+        e.delay.inc = e.delayR.inc = 0.0;
+        e.delay.target = e.delay.cur;
+        e.delayR.target = e.delayR.cur;
+    }
 
     // Schroeder all-pass with a preallocated buffer, so its length can change without allocating.
     struct Diffuser
@@ -557,6 +644,13 @@ private:
     void allocate (double sampleRate)
     {
         fs = sampleRate;
+        {
+            const double wc = 2.0 * kSpeedOfSound / models::kHeadRadius; // Brown & Duda head-shadow corner
+            for (auto& f : shadowHp)
+                f.setAnalog (1.0 / wc, 0.0, 1.0 / wc, 1.0, wc / std::tan (wc / (2.0 * fs)));
+            const double ws = kTwoPi * 400.0;
+            tailSideHp.setAnalog (1.0 / ws, 0.0, 1.0 / ws, 1.0, ws / std::tan (ws / (2.0 * fs)));
+        }
         modDepth = (float) (modDepthMs * 1.0e-3 * fs * 0.5);
         for (int i = 0; i < numLines; ++i)
         {
@@ -572,6 +666,8 @@ private:
         for (auto& ch : erDiffuser)
             for (auto& d : ch)
                 d.prepare ((int) std::ceil (0.007 * fs));
+        for (auto& d : erDiffuserEar)
+            d.prepare ((int) std::ceil (0.007 * fs));
     }
 
     static constexpr int numBands = 10; // octave bands 31.5 Hz - 16 kHz
@@ -674,6 +770,10 @@ private:
     std::array<int, numLines> delays {};
     std::array<float, numLines> lineGain {}, airCoeff {}, airState {};
     std::array<FirstOrder, numLines> shelf {}, lowShelf {};
+    std::array<FirstOrder, 2> shadowHp {};
+    FirstOrder tailSideHp;
+    double binaural = 0.0;
+    int binauralTicks = 0;
     struct Lfo
     {
         float c = 1, s = 0, cr = 1, sr = 0;
@@ -683,6 +783,7 @@ private:
     float modDepth = 0.0f;
     std::array<Diffuser, 4> inDiffuser;
     std::array<std::array<Diffuser, 3>, 3> erDiffuser;
+    std::array<Diffuser, 3> erDiffuserEar;
     std::array<Reflection, numReflections> er {};
     std::array<RefData, numRoomTypes> refData {};
     Ramp fdnGain, fdnInDelay;

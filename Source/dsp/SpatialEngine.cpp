@@ -482,6 +482,7 @@ void SpatialEngine::controlTick (bool snap) noexcept
         const int other = 1 - activeRoom;
         rooms[(size_t) other].configure (pendingRoom, sDecay.cur);
         rooms[(size_t) other].reset();
+        rooms[(size_t) other].setBinaural (rho);
         rooms[(size_t) other].setGeometry (r, pan * kPi / 2.0, rr, n, roomLevelLin, L);
         rooms[(size_t) other].snapGeometry();
         activeRoom = other;
@@ -506,6 +507,7 @@ void SpatialEngine::controlTick (bool snap) noexcept
         auto& room = rooms[(size_t) i];
         if (i == activeRoom)
             room.setDecay (sDecay.cur);
+        room.setBinaural (rho);
         room.setGeometry (r, pan * kPi / 2.0, rr, n, roomLevelLin, L);
         if (snap)
             room.snapGeometry();

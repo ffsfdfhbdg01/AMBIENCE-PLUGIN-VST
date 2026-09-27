@@ -95,6 +95,22 @@ double measureItdMs (const std::vector<float>& l, const std::vector<float>& r, d
     return (bestLag + frac) / fs * 1000.0;
 }
 
+double octaveEnergy (const std::vector<float>& x, double fc, double fs)
+{
+    Biquad h1, h2, l1, l2;
+    h1.set (designBiquadHz (BiquadType::highPass, fs, fc / std::sqrt (2.0), 0.707, 0));
+    h2 = h1;
+    l1.set (designBiquadHz (BiquadType::lowPass, fs, fc * std::sqrt (2.0), 0.707, 0));
+    l2 = l1;
+    double e = 0;
+    for (float v : x)
+    {
+        const float y = l2.process (l1.process (h2.process (h1.process (v))));
+        e += (double) y * y;
+    }
+    return e;
+}
+
 std::vector<float> lowpassed (const std::vector<float>& x, double fs, double fc)
 {
     Biquad a, b;
@@ -956,6 +972,52 @@ int main()
             e += (double) x[(size_t) i] * x[(size_t) i];
         }
         check (gainToDb (worst / std::sqrt (e / n)) < -100.0, "Keep Mono does not change the mono sum");
+    } });
+
+    tests.push_back ({ "14h. Headphones: binaural reflections, coherent low-frequency tail", [&]
+    {
+        // A reflection from the left: arrives at the right ear ~0.66 ms later, darker (head shadow).
+        RoomModel rm;
+        rm.prepare (fs);
+        rm.configure (1, 1.0); // open field: a single ground reflection
+        rm.setBinaural (1.0);
+        rm.setGeometry (10.0, -kPi / 2, 1.0, 1.0, 1.0, 32);
+        rm.snapGeometry();
+        const int n = 4800;
+        std::vector<float> l ((size_t) n), r ((size_t) n);
+        for (int i = 0; i < n; ++i)
+            rm.process (i == 0 ? 1.0f : 0.0f, l[(size_t) i], r[(size_t) i]);
+        // ITD in the ITD-dominant band (duplex theory), as for the direct sound in test 3.
+        near (measureItdMs (lowpassed (l, fs, 700.0), lowpassed (r, fs, 700.0), fs, 0), 0.656, 0.05, "reflection ITD below 700 Hz (right ear later)");
+        const auto hl = octaveEnergy (l, 4000.0, fs), hr = octaveEnergy (r, 4000.0, fs);
+        check (10.0 * std::log10 (hl / hr) > 4.0, "reflection ILD at 4 kHz: " + std::to_string (10.0 * std::log10 (hl / hr)) + " dB");
+
+        // Tail: interaural coherence below ~200 Hz in headphones, decorrelated on loudspeakers.
+        auto lowCorr = [&] (double rho)
+        {
+            RoomModel room;
+            room.prepare (fs);
+            room.configure (10, 1.0);
+            room.setBinaural (rho);
+            room.setGeometry (5.0, 0.0, 1.0, 1.0, 1.0, 32);
+            room.snapGeometry();
+            const auto noise = pinkNoise (48000 * 3);
+            std::vector<float> a (noise.size()), b (noise.size());
+            for (size_t i = 0; i < noise.size(); ++i)
+                room.process (noise[i], a[i], b[i]);
+            const auto la = lowpassed (lowpassed (a, fs, 150.0), fs, 150.0), lb = lowpassed (lowpassed (b, fs, 150.0), fs, 150.0);
+            double ab = 0, aa = 0, bb = 0;
+            for (size_t i = 48000; i < la.size(); ++i)
+            {
+                ab += (double) la[i] * lb[i];
+                aa += (double) la[i] * la[i];
+                bb += (double) lb[i] * lb[i];
+            }
+            return ab / std::sqrt (aa * bb);
+        };
+        const double spk = lowCorr (0.0), hp = lowCorr (1.0);
+        std::printf ("    tail L/R correlation below 150 Hz: loudspeakers %.2f, headphones %.2f\n", spk, hp);
+        check (hp > 0.95 && hp > spk + 0.15, "headphones: coherent low-frequency tail");
     } });
 
     tests.push_back ({ "15. CPU benchmark (informative, processing only)", [&]
