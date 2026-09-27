@@ -52,13 +52,21 @@ jobs:
         shell: bash
         run: |
           EXTRA=""
+          TESTS=OFF
           if [ "$RUNNER_OS" == "macOS" ]; then EXTRA='-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64'; fi
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DAMBIENCE_BUILD_TESTS=OFF "$EXTRA"
+          if [ "$RUNNER_OS" == "Linux" ]; then TESTS=ON; fi
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DAMBIENCE_BUILD_TESTS=$TESTS "$EXTRA"
 
       - name: Build
         shell: bash
         run: |
           for t in ${{ matrix.targets }}; do cmake --build build --config Release --parallel --target $t; done
+
+      - name: Host tests (layouts 1.0 ... 7.1.4, routing, bypass, state)
+        if: runner.os == 'Linux'
+        run: |
+          cmake --build build --config Release --parallel --target ambience_host_tests
+          xvfb-run -a ./build/ambience_host_tests_artefacts/Release/ambience_host_tests
 
       - name: pluginval (strictness 10)
         shell: bash

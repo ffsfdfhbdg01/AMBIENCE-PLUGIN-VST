@@ -6,6 +6,7 @@
 
 
 #include "AcousticModels.h"
+#include "Surround.h"
 
 namespace amb
 {
@@ -140,6 +141,10 @@ public:
                 d.reset();
         for (auto& d : erDiffuserEar)
             d.reset();
+        for (auto& ch : erDiffMulti)
+            for (auto& d : ch)
+                d.reset();
+        erLpMulti.fill (0.0f);
         erLpL = erLpR = erLpM = inLp = 0.0f;
         snapGeometry();
     }
@@ -191,6 +196,8 @@ public:
         // shadowed), otherwise the interaural time cue of the reflections would be lost.
         for (int k = 0; k < 3; ++k)
             erDiffuserEar[(size_t) k].set ((int) std::round (erMs[0][k] * scale * 1.0e-3 * fs), erG[k]);
+        diffusionScale = scale;
+        setMultiDiffusers();
         static const double inMs[4] = { 1.31, 2.17, 3.73, 5.29 };
         static const float inG[4] = { 0.72f, 0.72f, 0.62f, 0.62f };
         for (int k = 0; k < 4; ++k)
@@ -308,7 +315,7 @@ public:
             // The floor reflection is partly shadowed and absorbed by furniture, seats and people.
             const double surface = (i == 4 && s.kind == RoomKind::room) ? floorFactor : 1.0;
             const double g = open ? 0.0 : surface * wallReflection * std::pow (recDistance / d, rolloffExp) * levelLin;
-            setReflection (i, delaySamples, g, std::atan2 (dx, dy), inv);
+            setReflection (i, delaySamples, g, std::atan2 (dx, dy), inv, i == 5);
             if (! open)
                 firstDelay = std::min (firstDelay, delaySamples);
             meanPath += d / numReflections;
@@ -320,6 +327,98 @@ public:
         ramp (fdnGain, tail);
         // The diffuse field builds up from the first reflection on (scattering), not after all of them.
         ramp (fdnInDelay, firstDelay);
+    }
+
+    // Multichannel output (5.0 ... 7.1.4). Call at prepare time (allocates). Reflections are panned
+    // over the loudspeaker ring (the ceiling reflection onto the height layer), each channel gets
+    // its own diffusion cluster and its own orthogonal combination of the FDN lines; the total tail
+    // energy equals the stereo tail (centre -6 dB, heights -1.5 dB, LFE silent).
+    void setLayout (const SpeakerLayout& l)
+    {
+        layout = l;
+        multi = l.isSurround();
+        for (auto& ch : erDiffMulti)
+            for (auto& d : ch)
+                d.prepare ((int) std::ceil (0.009 * fs));
+        static const int rows[maxOutputChannels] = { 3, 6, 9, 10, 12, 15, 7, 11, 13, 14, 1, 2 }; // zero-sum, != inRow
+        double sumP = 0.0;
+        std::array<double, maxOutputChannels> power {};
+        for (int c = 0; c < l.numChannels; ++c)
+        {
+            const auto& sp = l.speakers[(size_t) c];
+            power[(size_t) c] = sp.lfe ? 0.0 : (c == l.centre ? 0.25 : (sp.elevationDeg > 10.0 ? 0.7 : 1.0));
+            sumP += power[(size_t) c];
+        }
+        for (int c = 0; c < maxOutputChannels; ++c)
+        {
+            tailWeight[(size_t) c] = c < l.numChannels && sumP > 0.0 ? (float) (0.25 * std::sqrt (2.0 * power[(size_t) c] / sumP)) : 0.0f;
+            for (int i = 0; i < numLines; ++i)
+                tailSign[(size_t) c][(size_t) i] = (float) detail::hadamardSign (rows[c], i);
+        }
+        setMultiDiffusers();
+        reset();
+    }
+
+    // Multichannel counterpart of process(): outs[c] for the layout's channels, plus the mono output.
+    void processMulti (float x, float* outs, float& outM) noexcept
+    {
+        input.push (x);
+        const int nCh = layout.numChannels;
+        float e[maxOutputChannels] = {};
+        float eM = 0;
+        const int nRefl = roomSpec (roomType).kind == RoomKind::openField ? 1 : numReflections;
+        for (int i = 0; i < nRefl; ++i)
+        {
+            auto& r = er[(size_t) i];
+            r.delay.step();
+            r.gainL.step();
+            r.gainR.step();
+            const float v = input.read ((float) r.delay.cur);
+            eM += (float) std::sqrt (r.gainL.cur * r.gainL.cur + r.gainR.cur * r.gainR.cur) * v;
+            auto& g = erMulti[(size_t) i];
+            for (int c = 0; c < nCh; ++c)
+            {
+                g[(size_t) c].step();
+                e[c] += (float) g[(size_t) c].cur * v;
+            }
+        }
+        for (int c = 0; c < nCh; ++c)
+        {
+            float& lp = erLpMulti[(size_t) c];
+            lp = flushDenormal (e[c] + erLpCoeff * (lp - e[c]));
+            auto& d = erDiffMulti[(size_t) c];
+            outs[c] = d[2].process (d[1].process (d[0].process (lp)));
+        }
+        erLpM = flushDenormal (eM + erLpCoeff * (erLpM - eM));
+        outM = erDiffuser[2][2].process (erDiffuser[2][1].process (erDiffuser[2][0].process (erLpM)));
+
+        fdnGain.step();
+        fdnInDelay.step();
+        if (roomHasTail (roomType))
+        {
+            float s[numLines];
+            tailStep (s);
+            static constexpr auto mSign = detail::hadamardRow<numLines> (mRow);
+            float tM = 0;
+            for (int i = 0; i < numLines; ++i)
+                tM += mSign[(size_t) i] * s[i];
+            outM += tM * 0.35355339f;
+            for (int c = 0; c < nCh; ++c)
+            {
+                const float w = tailWeight[(size_t) c];
+                if (w == 0.0f)
+                    continue;
+                const auto& sign = tailSign[(size_t) c];
+                float t = 0;
+                for (int i = 0; i < numLines; ++i)
+                    t += sign[(size_t) i] * s[i];
+                outs[c] += w * t;
+            }
+        }
+        for (int c = 0; c < nCh; ++c)
+            if (layout.speakers[(size_t) c].lfe)
+                outs[c] = 0.0f;
+        silentCounter = roomType == roomOff ? std::min (silentCounter + 1, 1 << 30) : 0;
     }
 
     // Headphones rendering amount (0 = loudspeakers, 1 = binaural): reflections get per-ear delays
@@ -337,6 +436,12 @@ public:
             {
                 rp->cur = rp->target;
                 rp->inc = 0;
+            }
+        for (auto& ref : erMulti)
+            for (auto& m : ref)
+            {
+                m.cur = m.target;
+                m.inc = 0;
             }
         fdnGain.cur = fdnGain.target; fdnGain.inc = 0;
         fdnInDelay.cur = fdnInDelay.target; fdnInDelay.inc = 0;
@@ -408,54 +513,13 @@ public:
         fdnInDelay.step();
         if (roomHasTail (roomType))
         {
-            const float raw = input.read ((float) fdnInDelay.cur) * (float) fdnGain.cur;
-            inLp = flushDenormal (raw + erLpCoeff * (inLp - raw));
-            float in = inLp;
-            for (auto& d : inDiffuser)
-                in = d.process (in);
-
-            // 16-line FDN with per-line wall + air absorption and a normalised 16x16 Hadamard
-            // feedback matrix (fast Walsh-Hadamard transform): every line feeds every other line
-            // equally, so no line rings on its own as a comb filter (a Householder matrix of this
-            // size keeps 7/8 of each line in itself).
-            float s[numLines], fb[numLines];
-            for (int i = 0; i < numLines; ++i)
-            {
-                // Slow, subtle delay modulation (deterministic quadrature oscillators, distinct rates):
-                // time-variation smears the fixed resonances of the network, so long tails do not
-                // ring metallically (cf. Lexicon "spin/wander", Dattorro 1997). Pitch deviation < 2.5 cents.
-                auto& o = lfo[(size_t) i];
-                const float c = o.c * o.cr - o.s * o.sr, sn = o.s * o.cr + o.c * o.sr;
-                o.c = c;
-                o.s = sn;
-                // Fractional read with a first-order all-pass interpolator (flat magnitude, cheap).
-                const float d = (float) (delays[(size_t) i] - 1) - modDepth * (1.0f + sn);
-                const int di = (int) d;
-                const float frac = d - (float) di;
-                const float ap = (1.0f - frac) / (1.0f + frac);
-                const float xin = lines[(size_t) i].at (di);
-                const float tap = flushDenormal (ap * (xin - o.y1) + o.x1);
-                o.x1 = xin;
-                o.y1 = tap;
-                const float v = lowShelf[(size_t) i].process (shelf[(size_t) i].process (tap)) * lineGain[(size_t) i];
-                const float a = airCoeff[(size_t) i];
-                airState[(size_t) i] = flushDenormal (v + a * (airState[(size_t) i] - v));
-                s[i] = fb[i] = airState[(size_t) i];
-            }
-            for (int h = 1; h < numLines; h <<= 1)
-                for (int i = 0; i < numLines; i += h << 1)
-                    for (int j = i; j < i + h; ++j)
-                    {
-                        const float u = fb[j], w = fb[j + h];
-                        fb[j] = u + w;
-                        fb[j + h] = u - w;
-                    }
-            static constexpr auto inSign = detail::hadamardRow<numLines> (inRow), lSign = detail::hadamardRow<numLines> (lRow),
-                                  rSign = detail::hadamardRow<numLines> (rRow), mSign = detail::hadamardRow<numLines> (mRow);
+            float s[numLines];
+            tailStep (s);
+            static constexpr auto lSign = detail::hadamardRow<numLines> (lRow), rSign = detail::hadamardRow<numLines> (rRow),
+                                  mSign = detail::hadamardRow<numLines> (mRow);
             float tL = 0, tR = 0, tM = 0;
             for (int i = 0; i < numLines; ++i)
             {
-                lines[(size_t) i].push ((fb[i] + inSign[(size_t) i] * in) * 0.25f);
                 tL += lSign[(size_t) i] * s[i];
                 tR += rSign[(size_t) i] * s[i];
                 tM += mSign[(size_t) i] * s[i];
@@ -482,6 +546,57 @@ public:
             silentCounter = std::min (silentCounter + 1, 1 << 30);
         else
             silentCounter = 0;
+    }
+
+    // One sample of the late reverb: input diffusion, modulated lines with wall/air absorption and
+    // the Hadamard feedback. s receives the 16 line outputs, combined by orthogonal output rows.
+    void tailStep (float* s) noexcept
+    {
+        const float raw = input.read ((float) fdnInDelay.cur) * (float) fdnGain.cur;
+        inLp = flushDenormal (raw + erLpCoeff * (inLp - raw));
+        float in = inLp;
+        for (auto& d : inDiffuser)
+            in = d.process (in);
+
+        // 16-line FDN with per-line wall + air absorption and a normalised 16x16 Hadamard
+        // feedback matrix (fast Walsh-Hadamard transform): every line feeds every other line
+        // equally, so no line rings on its own as a comb filter (a Householder matrix of this
+        // size keeps 7/8 of each line in itself).
+        float fb[numLines];
+        for (int i = 0; i < numLines; ++i)
+        {
+            // Slow, subtle delay modulation (deterministic quadrature oscillators, distinct rates):
+            // time-variation smears the fixed resonances of the network, so long tails do not
+            // ring metallically (cf. Lexicon "spin/wander", Dattorro 1997). Pitch deviation < 2.5 cents.
+            auto& o = lfo[(size_t) i];
+            const float c = o.c * o.cr - o.s * o.sr, sn = o.s * o.cr + o.c * o.sr;
+            o.c = c;
+            o.s = sn;
+            // Fractional read with a first-order all-pass interpolator (flat magnitude, cheap).
+            const float d = (float) (delays[(size_t) i] - 1) - modDepth * (1.0f + sn);
+            const int di = (int) d;
+            const float frac = d - (float) di;
+            const float ap = (1.0f - frac) / (1.0f + frac);
+            const float xin = lines[(size_t) i].at (di);
+            const float tap = flushDenormal (ap * (xin - o.y1) + o.x1);
+            o.x1 = xin;
+            o.y1 = tap;
+            const float v = lowShelf[(size_t) i].process (shelf[(size_t) i].process (tap)) * lineGain[(size_t) i];
+            const float a = airCoeff[(size_t) i];
+            airState[(size_t) i] = flushDenormal (v + a * (airState[(size_t) i] - v));
+            s[i] = fb[i] = airState[(size_t) i];
+        }
+        for (int h = 1; h < numLines; h <<= 1)
+            for (int i = 0; i < numLines; i += h << 1)
+                for (int j = i; j < i + h; ++j)
+                {
+                    const float u = fb[j], w = fb[j + h];
+                    fb[j] = u + w;
+                    fb[j + h] = u - w;
+                }
+        static constexpr auto inSign = detail::hadamardRow<numLines> (inRow);
+        for (int i = 0; i < numLines; ++i)
+            lines[(size_t) i].push ((fb[i] + inSign[(size_t) i] * in) * 0.25f);
     }
 
     // Energy gain (L + R) of the reverb (ER + tail) at frequency f relative to the input, for the
@@ -533,8 +648,19 @@ private:
 
     // Reflection targets: loudspeakers (amplitude panning, one delay) blended with headphones (per-ear
     // delay and head-shadow high-frequency gain h, applied as gain * (h - 1) on the shadow bus).
-    void setReflection (int i, double delaySamples, double g, double az, double inv) noexcept
+    void setReflection (int i, double delaySamples, double g, double az, double inv, bool ceiling = false) noexcept
     {
+        if (multi)
+        {
+            float gains[maxOutputChannels];
+            layout.pan (az * 180.0 / kPi, ceiling && layout.hasHeights(), gains);
+            auto& m = erMulti[(size_t) i];
+            for (int c = 0; c < layout.numChannels; ++c)
+            {
+                m[(size_t) c].target = g * gains[c];
+                m[(size_t) c].inc = (m[(size_t) c].target - m[(size_t) c].cur) * inv;
+            }
+        }
         auto ramp = [inv] (Ramp& rp, double target)
         {
             rp.target = target;
@@ -564,8 +690,29 @@ private:
         ramp (e.shadowR, g * ear * b * (hR - 1.0));
     }
 
+    // Per-channel diffusion clusters: the base delays stretched by a channel-dependent factor, so every
+    // loudspeaker gets its own (mutually decorrelated) cluster.
+    void setMultiDiffusers() noexcept
+    {
+        if (! multi)
+            return;
+        static const double baseMs[3] = { 0.61, 1.37, 2.63 };
+        static const float g[3] = { 0.6f, 0.6f, 0.5f };
+        for (int c = 0; c < layout.numChannels; ++c)
+            for (int k = 0; k < 3; ++k)
+            {
+                const double stretch = 1.0 + 0.071 * c + 0.037 * ((c * (k + 2)) % 5);
+                erDiffMulti[(size_t) c][(size_t) k].set ((int) std::round (baseMs[k] * stretch * diffusionScale * 1.0e-3 * fs), g[k]);
+            }
+    }
+
     void silenceReflection (int i, double inv) noexcept
     {
+        for (auto& m : erMulti[(size_t) i])
+        {
+            m.target = 0.0;
+            m.inc = -m.cur * inv;
+        }
         auto& e = er[(size_t) i];
         for (Ramp* rp : { &e.gainL, &e.gainR, &e.shadowL, &e.shadowR })
         {
@@ -780,7 +927,13 @@ private:
     std::array<FirstOrder, numLines> shelf {}, lowShelf {};
     std::array<FirstOrder, 2> shadowHp {};
     FirstOrder tailSideHp;
-    double binaural = 0.0, proximity = 0.5;
+    double binaural = 0.0, proximity = 0.5, diffusionScale = 1.0;
+    SpeakerLayout layout;
+    bool multi = false;
+    std::array<std::array<Ramp, maxOutputChannels>, numReflections> erMulti {};
+    std::array<std::array<Diffuser, 3>, maxOutputChannels> erDiffMulti;
+    std::array<float, maxOutputChannels> erLpMulti {}, tailWeight {};
+    std::array<std::array<float, numLines>, maxOutputChannels> tailSign {};
     int binauralTicks = 0;
     struct Lfo
     {

@@ -104,33 +104,159 @@ AmbienceProcessor::AmbienceProcessor()
     bypassParam = dynamic_cast<juce::AudioParameterBool*> (apvts.getParameter ("bypass"));
 }
 
+namespace
+{
+// Loudspeaker position of a JUCE channel type (ITU-R BS.775 / Dolby Atmos bed positions).
+bool speakerForType (juce::AudioChannelSet::ChannelType t, amb::Speaker& s)
+{
+    using CT = juce::AudioChannelSet::ChannelType;
+    s = {};
+    switch (t)
+    {
+        case CT::left: s.azimuthDeg = -30; return true;
+        case CT::right: s.azimuthDeg = 30; return true;
+        case CT::centre: s.azimuthDeg = 0; return true;
+        case CT::LFE: case CT::LFE2: s.lfe = true; return true;
+        case CT::leftSurround: s.azimuthDeg = -110; return true;
+        case CT::rightSurround: s.azimuthDeg = 110; return true;
+        case CT::leftSurroundSide: s.azimuthDeg = -90; return true;
+        case CT::rightSurroundSide: s.azimuthDeg = 90; return true;
+        case CT::leftSurroundRear: s.azimuthDeg = -150; return true;
+        case CT::rightSurroundRear: s.azimuthDeg = 150; return true;
+        case CT::centreSurround: s.azimuthDeg = 180; return true;
+        case CT::wideLeft: s.azimuthDeg = -60; return true;
+        case CT::wideRight: s.azimuthDeg = 60; return true;
+        case CT::topFrontLeft: s.azimuthDeg = -45; s.elevationDeg = 45; return true;
+        case CT::topFrontRight: s.azimuthDeg = 45; s.elevationDeg = 45; return true;
+        case CT::topFrontCentre: s.azimuthDeg = 0; s.elevationDeg = 45; return true;
+        case CT::topRearLeft: s.azimuthDeg = -135; s.elevationDeg = 45; return true;
+        case CT::topRearRight: s.azimuthDeg = 135; s.elevationDeg = 45; return true;
+        case CT::topRearCentre: s.azimuthDeg = 180; s.elevationDeg = 45; return true;
+        case CT::topSideLeft: s.azimuthDeg = -90; s.elevationDeg = 45; return true;
+        case CT::topSideRight: s.azimuthDeg = 90; s.elevationDeg = 45; return true;
+        case CT::topMiddle: s.azimuthDeg = 0; s.elevationDeg = 80; return true;
+        default: return false;
+    }
+}
+
+bool layoutFromSet (const juce::AudioChannelSet& set, amb::SpeakerLayout& layout)
+{
+    layout = {};
+    if (set.size() > amb::maxOutputChannels)
+        return false;
+    for (int c = 0; c < set.size(); ++c)
+        if (! speakerForType (set.getTypeOfChannel (c), layout.speakers[(size_t) layout.numChannels++]))
+            return false;
+    layout.finalise();
+    return true;
+}
+
+// Multichannel outputs need a front stage (L, C, R).
+bool isSupportedSurround (const juce::AudioChannelSet& set)
+{
+    amb::SpeakerLayout l;
+    return set.size() > 2 && layoutFromSet (set, l) && l.left >= 0 && l.right >= 0 && l.centre >= 0;
+}
+} // namespace
+
 bool AmbienceProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     const auto in = layouts.getMainInputChannelSet();
     const auto out = layouts.getMainOutputChannelSet();
-    if (out != juce::AudioChannelSet::mono() && out != juce::AudioChannelSet::stereo())
-        return false;
-    if (in != juce::AudioChannelSet::mono() && in != juce::AudioChannelSet::stereo())
-        return false;
-    // Supported: 1->1, 1->2, 2->2.
-    return ! (in == juce::AudioChannelSet::stereo() && out == juce::AudioChannelSet::mono());
+    const bool inBasic = in == juce::AudioChannelSet::mono() || in == juce::AudioChannelSet::stereo();
+    if (out == juce::AudioChannelSet::mono())
+        return in == juce::AudioChannelSet::mono(); // 1 -> 1
+    if (out == juce::AudioChannelSet::stereo())
+        return inBasic; // 1 -> 2, 2 -> 2
+    // Multichannel (5.0 ... 7.1.4): from mono, stereo or the same layout (e.g. on a surround aux).
+    return isSupportedSurround (out) && (inBasic || in == out);
 }
 
 void AmbienceProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     engine.prepare (sampleRate, samplesPerBlock);
-    dryBuffer.setSize (2, samplesPerBlock, false, true, true);
+
+    const auto outSet = getChannelLayoutOfBus (false, 0);
+    const auto inSet = getChannelLayoutOfBus (true, 0);
+    amb::SpeakerLayout layout;
+    surroundOut = isSupportedSurround (outSet) && layoutFromSet (outSet, layout);
+    outputChannelsForUi = outSet.size();
+    engine.setOutputLayout (surroundOut ? layout : amb::SpeakerLayout {});
+    outLayout = layout;
+
+    // Multichannel input: folded to a stereo source (centre at -3 dB into both, surrounds and
+    // heights at -6 dB); the LFE input is passed straight to the LFE output.
+    foldL.fill (0.0f);
+    foldR.fill (0.0f);
+    lfeIn = lfeOut = -1;
+    surroundIn = inSet.size() > 2;
+    if (surroundIn)
+    {
+        amb::SpeakerLayout inLayout;
+        layoutFromSet (inSet, inLayout);
+        for (int c = 0; c < inLayout.numChannels; ++c)
+        {
+            const auto& sp = inLayout.speakers[(size_t) c];
+            if (sp.lfe)
+            {
+                lfeIn = c;
+                continue;
+            }
+            const float w = (std::abs (sp.azimuthDeg) <= 30.0 && sp.elevationDeg < 10.0) ? 1.0f : 0.5f;
+            if (std::abs (sp.azimuthDeg) < 1.0 || std::abs (std::abs (sp.azimuthDeg) - 180.0) < 1.0)
+                foldL[(size_t) c] = foldR[(size_t) c] = 0.70710678f * w;
+            else if (sp.azimuthDeg < 0.0)
+                foldL[(size_t) c] = w;
+            else
+                foldR[(size_t) c] = w;
+        }
+    }
+    if (surroundOut)
+        for (int c = 0; c < layout.numChannels; ++c)
+            if (layout.speakers[(size_t) c].lfe)
+                lfeOut = c;
+
+    const int numOut = std::max (2, getTotalNumOutputChannels());
+    dryBuffer.setSize (numOut, samplesPerBlock, false, true, true);
+    foldBuffer.setSize (2, samplesPerBlock, false, true, true);
+    lfeBuffer.setSize (1, samplesPerBlock, false, true, true);
     bypassMix = bypassParam->get() ? 0.0f : 1.0f;
     bypassStep = (float) (1.0 / (0.02 * sampleRate));
     setLatencySamples (engine.getLatencySamples());
     monoOutput = getTotalNumOutputChannels() == 1;
 }
 
+// Dry (bypassed) signal on the output layout: mono -> centre (or L/R), stereo -> L/R, a multichannel
+// input -> the same channels.
+void AmbienceProcessor::writeDry (const juce::AudioBuffer<float>& src, juce::AudioBuffer<float>& dst, int numIn, int numOut, int n) const
+{
+    for (int c = 0; c < numOut; ++c)
+    {
+        if (! surroundOut)
+        {
+            dst.copyFrom (c, 0, src, std::min (c, numIn - 1), 0, n);
+            continue;
+        }
+        dst.clear (c, 0, n);
+        if (surroundIn)
+            dst.copyFrom (c, 0, src, c, 0, n);
+        else if (numIn == 1)
+        {
+            if (c == outLayout.centre)
+                dst.copyFrom (c, 0, src, 0, 0, n);
+        }
+        else if (c == outLayout.left || c == outLayout.right)
+            dst.copyFrom (c, 0, src, c == outLayout.left ? 0 : 1, 0, n);
+    }
+}
+
 void AmbienceProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
-    const int numIn = juce::jlimit (1, 2, getTotalNumInputChannels());
-    const int numOut = juce::jlimit (1, 2, getTotalNumOutputChannels());
+    const int numInTotal = getTotalNumInputChannels();
+    const int numOutTotal = getTotalNumOutputChannels();
+    const int numOut = surroundOut ? numOutTotal : juce::jlimit (1, 2, numOutTotal);
+    const int numIn = surroundIn ? numInTotal : juce::jlimit (1, 2, numInTotal);
     const int n = buffer.getNumSamples();
     monoOutput = numOut == 1;
 
@@ -142,13 +268,11 @@ void AmbienceProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     const float target = bypassParam->get() ? 0.0f : 1.0f;
     const bool crossfading = bypassMix != target;
 
-    // Dry signal mapped to the output layout (mono input feeds both outputs).
     if (crossfading || target == 0.0f)
     {
-        if (dryBuffer.getNumSamples() < n)
-            dryBuffer.setSize (2, n, false, false, true);
-        for (int c = 0; c < numOut; ++c)
-            dryBuffer.copyFrom (c, 0, buffer, std::min (c, numIn - 1), 0, n);
+        if (dryBuffer.getNumSamples() < n || dryBuffer.getNumChannels() < numOut)
+            dryBuffer.setSize (std::max (2, numOut), n, false, false, true);
+        writeDry (buffer, dryBuffer, numIn, numOut, n);
     }
 
     if (target == 0.0f && ! crossfading)
@@ -159,9 +283,42 @@ void AmbienceProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         return;
     }
 
-    const float* in[2] = { buffer.getReadPointer (0), buffer.getReadPointer (std::min (1, numIn - 1)) };
-    float* out[2] = { buffer.getWritePointer (0), buffer.getWritePointer (std::min (1, buffer.getNumChannels() - 1)) };
-    engine.process (in, numIn, out, numOut, n);
+    // Engine input: mono / stereo, or a multichannel input folded to stereo.
+    const float* in[2];
+    int engineIn = numIn;
+    if (surroundIn)
+    {
+        if (foldBuffer.getNumSamples() < n)
+            foldBuffer.setSize (2, n, false, false, true);
+        foldBuffer.clear (0, n);
+        for (int c = 0; c < numIn; ++c)
+        {
+            if (foldL[(size_t) c] != 0.0f)
+                foldBuffer.addFrom (0, 0, buffer, c, 0, n, foldL[(size_t) c]);
+            if (foldR[(size_t) c] != 0.0f)
+                foldBuffer.addFrom (1, 0, buffer, c, 0, n, foldR[(size_t) c]);
+        }
+        if (lfeIn >= 0)
+        {
+            if (lfeBuffer.getNumSamples() < n)
+                lfeBuffer.setSize (1, n, false, false, true);
+            lfeBuffer.copyFrom (0, 0, buffer, lfeIn, 0, n);
+        }
+        in[0] = foldBuffer.getReadPointer (0);
+        in[1] = foldBuffer.getReadPointer (1);
+        engineIn = 2;
+    }
+    else
+    {
+        in[0] = buffer.getReadPointer (0);
+        in[1] = buffer.getReadPointer (std::min (1, numIn - 1));
+    }
+    float* out[amb::maxOutputChannels];
+    for (int c = 0; c < numOut; ++c)
+        out[c] = buffer.getWritePointer (std::min (c, buffer.getNumChannels() - 1));
+    engine.process (in, engineIn, out, numOut, n);
+    if (surroundIn && lfeIn >= 0 && lfeOut >= 0)
+        buffer.copyFrom (lfeOut, 0, lfeBuffer, 0, 0, n);
     autoGainDb = engine.getAutoGainDb();
 
     if (crossfading)
@@ -185,9 +342,22 @@ void AmbienceProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 void AmbienceProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     const int numIn = getTotalNumInputChannels();
-    if (numIn == 1)
-        for (int c = 1; c < getTotalNumOutputChannels(); ++c)
-            buffer.copyFrom (c, 0, buffer, 0, 0, buffer.getNumSamples());
+    const int numOut = getTotalNumOutputChannels();
+    const int n = buffer.getNumSamples();
+    if (! surroundOut)
+    {
+        if (numIn == 1)
+            for (int c = 1; c < numOut; ++c)
+                buffer.copyFrom (c, 0, buffer, 0, 0, n);
+        return;
+    }
+    if (surroundIn)
+        return; // same layout in and out
+    if (dryBuffer.getNumSamples() < n || dryBuffer.getNumChannels() < numOut)
+        return; // not prepared for this block size (host bypass before prepare): leave untouched
+    writeDry (buffer, dryBuffer, std::min (numIn, 2), numOut, n);
+    for (int c = 0; c < numOut; ++c)
+        buffer.copyFrom (c, 0, dryBuffer, c, 0, n);
 }
 
 void AmbienceProcessor::updateMeters (const juce::AudioBuffer<float>& buffer, int numOut, int n) noexcept

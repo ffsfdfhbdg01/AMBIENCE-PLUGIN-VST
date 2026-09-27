@@ -1048,6 +1048,105 @@ int main()
         check (def.proximity == 50.0f, "default 50 % (previous geometry)");
     } });
 
+    tests.push_back ({ "14j. Surround: 5.1 / 7.1.4 output", [&]
+    {
+        auto makeLayout = [] (std::initializer_list<Speaker> list)
+        {
+            SpeakerLayout l;
+            for (const auto& sp : list)
+                l.speakers[(size_t) l.numChannels++] = sp;
+            l.finalise();
+            return l;
+        };
+        const auto l51 = makeLayout ({ { -30, 0 }, { 30, 0 }, { 0, 0 }, { 0, 0, true }, { -110, 0 }, { 110, 0 } });
+        const auto l714 = makeLayout ({ { -30, 0 }, { 30, 0 }, { 0, 0 }, { 0, 0, true }, { -90, 0 }, { 90, 0 }, { -150, 0 }, { 150, 0 },
+                                        { -45, 45 }, { 45, 45 }, { -135, 45 }, { 135, 45 } });
+        auto renderLayout = [&] (const EngineParams& p, const std::vector<std::vector<float>>& in, const SpeakerLayout& layout)
+        {
+            SpatialEngine e;
+            e.prepare (fs, 256);
+            e.setOutputLayout (layout);
+            e.setParams (p);
+            const int n = (int) in[0].size(), nc = layout.numChannels;
+            std::vector<std::vector<float>> out ((size_t) nc, std::vector<float> ((size_t) n));
+            for (int start = 0; start < n; start += 256)
+            {
+                const int len = std::min (256, n - start);
+                const float* ip[2] = { in[0].data() + start, in.size() > 1 ? in[1].data() + start : nullptr };
+                float* op[maxOutputChannels];
+                for (int c = 0; c < nc; ++c)
+                    op[c] = out[(size_t) c].data() + start;
+                e.process (ip, (int) in.size(), op, nc, len);
+            }
+            return out;
+        };
+        auto energy = [] (const std::vector<float>& x, int from = 0)
+        {
+            double e = 0;
+            for (size_t i = (size_t) from; i < x.size(); ++i)
+                e += (double) x[i] * x[i];
+            return e;
+        };
+        const auto x = pinkNoise (48000 * 2);
+        const double ex = energy (x, 9600);
+
+        auto p = dryParams();
+        auto o = renderLayout (p, { x }, l51);
+        near (gainToDb (energy (o[2], 9600) / ex) / 2.0, 0.0, 0.01, "centred mono source: unity in C");
+        check (energy (o[0]) == 0.0 && energy (o[1]) == 0.0 && energy (o[4]) == 0.0 && energy (o[5]) == 0.0, "centred mono source: C only");
+        check (energy (o[3]) == 0.0, "LFE silent");
+        p.pan = -100;
+        o = renderLayout (p, { x }, l51);
+        near (gainToDb (energy (o[0], 9600) / ex) / 2.0, 0.0, 0.01, "pan L100: unity in L");
+        check (energy (o[2]) < 1.0e-12 * ex, "pan L100: nothing in C");
+        p.pan = -50;
+        o = renderLayout (p, { x }, l51);
+        near (10.0 * std::log10 ((energy (o[0], 9600) + energy (o[2], 9600)) / ex), 0.0, 0.05, "pan L50: constant power over L and C");
+
+        // Stereo source keeps its L/R image (nothing in C).
+        const auto y = pinkNoise (48000 * 2, 99u);
+        p = dryParams();
+        o = renderLayout (p, { x, y }, l51);
+        check (energy (o[2]) < 1.0e-12 * ex, "stereo source: centre channel empty");
+        near (gainToDb (energy (o[0], 9600) / ex) / 2.0, 0.0, 0.05, "stereo source: L unchanged");
+
+        // Room: reflections and tail reach the surrounds; the total reverb energy equals stereo.
+        EngineParams q;
+        q.room = 7;
+        q.distance = 5;
+        o = renderLayout (q, { x }, l51);
+        double total = 0;
+        for (auto& ch : o)
+            total += energy (ch, 9600);
+        const auto st = render (q, { x }, 2);
+        const double stereoTotal = energy (st[0], 9600) + energy (st[1], 9600);
+        near (10.0 * std::log10 (total / stereoTotal), 0.0, 1.0, "5.1 total energy equals stereo (same DRR)");
+        check (energy (o[4], 9600) > 0.02 * total && energy (o[5], 9600) > 0.02 * total, "room in the surround channels");
+
+        // 7.1.4: the ceiling reflection and the tail reach the height layer.
+        o = renderLayout (q, { x }, l714);
+        double heights = 0, all = 0;
+        for (int c = 0; c < 12; ++c)
+        {
+            all += energy (o[(size_t) c], 9600);
+            if (c >= 8)
+                heights += energy (o[(size_t) c], 9600);
+        }
+        check (heights > 0.05 * all, "7.1.4: room in the height channels (" + std::to_string (10.0 * std::log10 (heights / all)) + " dB)");
+        check (energy (o[3]) == 0.0, "7.1.4: LFE silent");
+        bool finite = true;
+        for (auto& ch : o)
+            for (float v : ch)
+                finite = finite && std::isfinite (v);
+        check (finite, "7.1.4: finite output");
+
+        // Mono Depth: everything in the centre channel.
+        q.monoDepth = true;
+        o = renderLayout (q, { x }, l51);
+        check (energy (o[0]) == 0.0 && energy (o[1]) == 0.0 && energy (o[4]) == 0.0 && energy (o[5]) == 0.0 && energy (o[2]) > 0.0,
+               "Mono Depth: centre channel only");
+    } });
+
     tests.push_back ({ "15. CPU benchmark (informative, processing only)", [&]
     {
         const int n = 48000 * 10, block = 512;

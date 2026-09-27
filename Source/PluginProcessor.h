@@ -40,6 +40,8 @@ public:
     juce::AudioProcessorParameter* getBypassParameter() const override { return bypassParam; }
 
     bool isMonoOutput() const noexcept { return monoOutput.load(); }
+    bool isSurroundOutput() const noexcept { return surroundOut.load(); }
+    int getOutputChannelsForUi() const noexcept { return outputChannelsForUi.load(); }
 
     juce::UndoManager undoManager;
     juce::AudioProcessorValueTreeState apvts;
@@ -54,11 +56,18 @@ public:
 
 private:
     void updateMeters (const juce::AudioBuffer<float>& buffer, int numOut, int numSamples) noexcept;
+    void writeDry (const juce::AudioBuffer<float>& src, juce::AudioBuffer<float>& dst, int numIn, int numOut, int n) const;
 
     amb::SpatialEngine engine;
     std::vector<std::pair<std::string, std::atomic<float>*>> rawParams;
     juce::AudioParameterBool* bypassParam = nullptr;
-    juce::AudioBuffer<float> dryBuffer;
+    juce::AudioBuffer<float> dryBuffer, foldBuffer, lfeBuffer;
+    amb::SpeakerLayout outLayout;
+    std::atomic<bool> surroundOut { false };
+    bool surroundIn = false;
+    std::atomic<int> outputChannelsForUi { 2 };
+    std::array<float, amb::maxOutputChannels> foldL {}, foldR {};
+    int lfeIn = -1, lfeOut = -1;
     float bypassMix = 1.0f; // 1 = processed, 0 = bypassed
     float bypassStep = 0.0f;
     std::atomic<bool> monoOutput { false };

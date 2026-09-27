@@ -563,8 +563,9 @@ void AmbienceEditor::timerCallback()
     stage.setMonoOutput (mono);
     panKnob.setEnabled (! mono);
     widthKnob.setEnabled (! mono);
-    renderSeg.setEnabledAll (! mono);
-    monoSafeToggle.setEnabled (! mono);
+    const bool multichannel = proc.isSurroundOutput();
+    renderSeg.setEnabledAll (! mono && ! multichannel);
+    monoSafeToggle.setEnabled (! mono && ! multichannel);
     monoToStereoToggle.setEnabled (! mono);
     keepMonoToggle.setEnabled (! mono && proc.apvts.getRawParameterValue (pid::monoToStereo)->load() > 0.5f);
     advanced->setMonoOutput (mono);
@@ -584,7 +585,7 @@ void AmbienceEditor::timerCallback()
         c->setAlpha (powered ? 1.0f : 0.4f);
 
     // Status line: bypass, headphone note and mono warning.
-    const bool headphones = proc.apvts.getRawParameterValue (pid::renderMode)->load() > 0.5f && ! mono;
+    const bool headphones = proc.apvts.getRawParameterValue (pid::renderMode)->load() > 0.5f && ! mono && ! multichannel;
     const bool monoSafe = proc.apvts.getRawParameterValue (pid::monoSafe)->load() > 0.5f;
     if (updateChecker.isChecking())
     {
@@ -595,6 +596,13 @@ void AmbienceEditor::timerCallback()
     {
         statusLabel.setText (juce::String::fromUTF8 ("OFF \xe2\x80\x94 bypassed"), juce::dontSendNotification);
         statusLabel.setColour (juce::Label::textColourId, col::warn);
+    }
+    else if (multichannel && ! monoDepth)
+    {
+        const int ch = proc.getOutputChannelsForUi();
+        const juce::String name = ch == 6 ? "5.1" : ch == 5 ? "5.0" : ch == 8 ? "7.1" : ch == 7 ? "7.0" : ch == 12 ? "7.1.4" : ch == 10 ? "7.1.2 / 5.1.4" : juce::String (ch) + " ch";
+        statusLabel.setText (name + juce::String::fromUTF8 (" \xe2\x80\x94 direct over L-C-R, room in all channels"), juce::dontSendNotification);
+        statusLabel.setColour (juce::Label::textColourId, col::textDim);
     }
     else if (headphones)
     {

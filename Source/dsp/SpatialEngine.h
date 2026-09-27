@@ -19,7 +19,13 @@ public:
     // Call before process() with the current plain parameter values.
     void setParams (const EngineParams& p);
 
-    // in: numIn channels (1 or 2). out: numOut channels (1 or 2). May alias in == out.
+    // Multichannel output (5.0 ... 7.1.4): call at prepare time (allocates). A layout with 1 or 2
+    // channels restores mono/stereo operation.
+    void setOutputLayout (const SpeakerLayout& layout);
+    const SpeakerLayout& getOutputLayout() const noexcept { return outLayout; }
+
+    // in: numIn channels (1 or 2). out: numOut channels (1 or 2, or the multichannel layout's count).
+    // May alias in == out.
     void process (const float* const* in, int numIn, float* const* out, int numOut, int numSamples) noexcept;
 
     int getLatencySamples() const noexcept { return 0; }
@@ -78,6 +84,9 @@ private:
     void runFits (bool full) noexcept;
     void updateAutoGainModel() noexcept;
     void processSample (float xL, float xR, float& oL, float& oR) noexcept;
+    void processSampleSurround (float xL, float xR, float* outs) noexcept;
+    void stepRamps() noexcept;
+    void directPath (float xL, float xR, float& M, float& side, float& roomIn) noexcept;
 
     static void panLawGains (int law, double p, double& l, double& r) noexcept;
     void headphoneGeometry (double azimuthRad, double r, double& dL, double& dR, double& gL, double& gR, double& aL, double& aR) const noexcept;
@@ -104,7 +113,11 @@ private:
     // DSP state
     FirstOrder prox[2];
     DelayLine propLine[2];
-    FittedCascade<2> air, obstruction, occlusion;
+    FittedCascade<2> air, obstruction;
+    FittedCascade<maxOutputChannels> occlusion;
+    SpeakerLayout outLayout;
+    bool surround = false;
+    std::array<Ramp, maxOutputChannels> rFront {};
     Stereoizer stereoizer;
     bool m2sRunning = false;
 

@@ -108,4 +108,34 @@ if(AMBIENCE_BUILD_PLUGIN)
             juce::juce_recommended_config_flags
             juce::juce_recommended_lto_flags
             juce::juce_recommended_warning_flags)
+
+    # Host-level tests: the processor (layouts, routing, bypass, state) built as a console app.
+    if(AMBIENCE_BUILD_TESTS)
+        juce_add_console_app(ambience_host_tests PRODUCT_NAME "ambience_host_tests")
+        target_sources(ambience_host_tests PRIVATE
+            tests/PluginHostTests.cpp
+            Source/PluginProcessor.cpp
+            Source/PluginEditor.cpp
+            Source/PresetManager.cpp
+            Source/UpdateChecker.cpp
+            Source/ui/LookAndFeel.cpp
+            Source/ui/StageView.cpp
+            Source/ui/Meters.cpp)
+        target_compile_definitions(ambience_host_tests PRIVATE
+            JUCE_WEB_BROWSER=0
+            JUCE_USE_CURL=0
+            JucePlugin_Name="SAMS AMBIENCE CONTROL"
+            JucePlugin_VersionString="${AMBIENCE_PLUGIN_VERSION}"
+            AMBIENCE_GITHUB_REPO="${AMBIENCE_GITHUB_REPO}")
+        if(NOT MSVC)
+            target_compile_options(ambience_host_tests PRIVATE -Wno-float-equal)
+        endif()
+        target_link_libraries(ambience_host_tests PRIVATE
+            ambience_dsp
+            AmbienceData
+            juce::juce_audio_utils
+            juce::juce_dsp
+            juce::juce_recommended_config_flags)
+        add_test(NAME ambience_host_tests COMMAND ambience_host_tests)
+    endif()
 endif()

@@ -76,7 +76,11 @@ void SpatialEngine::prepare (double sampleRate, int /*maxBlockSize*/)
     bassHp2.setup (fs, 80.0, 0.7071);
 
     for (auto& r : rooms)
+    {
         r.prepare (fs);
+        if (surround)
+            r.setLayout (outLayout);
+    }
 
     reset();
 }
@@ -130,7 +134,7 @@ void SpatialEngine::computeTargets() noexcept
     sPan.target = monoOut ? 0.0 : std::clamp ((double) p.pan, -100.0, 100.0) / 100.0;
     sTimePan.target = std::clamp ((double) p.timePan, 0.0, 100.0) / 100.0;
     sPsi.target = p.inputMode == 1 ? 0.0 : (p.inputMode == 2 ? 1.0 : (numInChannels == 2 ? 1.0 : 0.0));
-    sRho.target = (p.renderMode == 1 && ! monoOut) ? 1.0 : 0.0;
+    sRho.target = (p.renderMode == 1 && ! monoOut && ! surround) ? 1.0 : 0.0;
     sMonoSafe.target = p.monoSafe ? 1.0 : 0.0;
     sWidth.target = monoOut ? 1.0 : std::clamp ((double) p.width, 0.0, 200.0) / 100.0;
     sPropMix.target = p.propDelay ? 1.0 : 0.0;
@@ -411,6 +415,18 @@ void SpatialEngine::controlTick (bool snap) noexcept
     setRamp (rGL, GL);
     setRamp (rGR, GR);
     setRamp (rKs, std::min (GL, GR));
+    if (surround)
+    {
+        // Mono sources: pairwise constant-power panning over the front (L-C-R, +-30 deg), so a centred
+        // source sits in the centre channel (film convention). Stereo sources keep their L/R image.
+        float vb[maxOutputChannels];
+        outLayout.pan (pan * 30.0, false, vb);
+        for (int c = 0; c < outLayout.numChannels; ++c)
+        {
+            const double stereoGain = c == outLayout.left ? GL : (c == outLayout.right ? GR : 0.0);
+            setRamp (rFront[(size_t) c], lerp ((double) vb[c], stereoGain, psi));
+        }
+    }
 
     // Position EQ (Equalized Ambience): the channel away from the source gets a gentle high-shelf
     // cut growing with |pan| — a mild head-shadow-like spectral cue on top of level/time panning
@@ -420,7 +436,7 @@ void SpatialEngine::controlTick (bool snap) noexcept
         const double eq = sEq.cur;
         const double cutL = maxCutDb * eq * std::max (0.0, pan);
         const double cutR = maxCutDb * eq * std::max (0.0, -pan);
-        posEqActive = cutL != 0.0 || cutR != 0.0;
+        posEqActive = (cutL != 0.0 || cutR != 0.0) && ! surround;
         posEqL.set (designBiquadHz (BiquadType::highShelf, fs, 5000.0, 0.707, cutL));
         posEqR.set (designBiquadHz (BiquadType::highShelf, fs, 5000.0, 0.707, cutR));
         if (! posEqActive)
@@ -432,7 +448,7 @@ void SpatialEngine::controlTick (bool snap) noexcept
     const double safe = sMonoSafe.cur;
     setRamp (rSafe, safe);
     const double tauMax = lerp (fullMaxTime, monoSafeMaxTime, safe) * fs;
-    const double tau = t * pan * tauMax;
+    const double tau = surround ? 0.0 : t * pan * tauMax; // multichannel: amplitude panning over L-C-R
     setRamp (rTauL, std::max (0.0, tau));
     setRamp (rTauR, std::max (0.0, -tau));
     setRamp (rPsiIn, psi);
@@ -549,7 +565,14 @@ void SpatialEngine::updateAutoGainModel() noexcept
     const double pIn = numInChannels == 2 ? 2.0 * (1.0 + stereoSideRatio) : 1.0;
     const double wsT = rWS.tgt;
     const double m2sT = rM2SSide.tgt;
-    const double speakerPower = GL * GL + GR * GR + 2.0 * ks * ks * (psi * psi * sideEnergy * wsT * wsT + m2sT * m2sT * m2sSidePower);
+    double frontPower = GL * GL + GR * GR;
+    if (surround)
+    {
+        frontPower = 0.0;
+        for (int c = 0; c < outLayout.numChannels; ++c)
+            frontPower += (double) rFront[(size_t) c].tgt * rFront[(size_t) c].tgt;
+    }
+    const double speakerPower = frontPower + 2.0 * ks * ks * (psi * psi * sideEnergy * wsT * wsT + m2sT * m2sT * m2sSidePower);
 
     double sumOut = 0.0, sumIn = 0.0;
     for (int k = 0; k < nG; ++k)
@@ -598,9 +621,22 @@ void SpatialEngine::updateAutoGainModel() noexcept
 }
 
 //==============================================================================
+void SpatialEngine::setOutputLayout (const SpeakerLayout& layout)
+{
+    outLayout = layout;
+    outLayout.finalise();
+    surround = outLayout.isSurround();
+    for (auto& r : rooms)
+        if (surround)
+            r.setLayout (outLayout);
+    needsSnap = true;
+    computeTargets();
+}
+
 void SpatialEngine::process (const float* const* in, int numIn, float* const* out, int numOut, int numSamples) noexcept
 {
-    if (numIn != numInChannels || numOut != numOutChannels)
+    const bool multichannel = surround && numOut == outLayout.numChannels;
+    if (numIn != numInChannels || std::min (numOut, 2) != numOutChannels)
     {
         numInChannels = std::clamp (numIn, 1, 2);
         numOutChannels = std::clamp (numOut, 1, 2);
@@ -616,28 +652,43 @@ void SpatialEngine::process (const float* const* in, int numIn, float* const* ou
         }
         const float xL = in[0][i];
         const float xR = numIn > 1 ? in[1][i] : xL;
-        float oL, oR;
-        processSample (xL, xR, oL, oR);
-        if (numOut > 1)
+        if (multichannel)
         {
-            out[0][i] = oL;
-            out[1][i] = oR;
+            float outs[maxOutputChannels];
+            processSampleSurround (xL, xR, outs);
+            for (int c = 0; c < numOut; ++c)
+                out[c][i] = outs[c];
         }
         else
-            out[0][i] = oL;
+        {
+            float oL, oR;
+            processSample (xL, xR, oL, oR);
+            if (numOut > 1)
+            {
+                out[0][i] = oL;
+                out[1][i] = oR;
+            }
+            else
+                out[0][i] = oL;
+        }
         tickPos = (tickPos + 1) % tickLength;
     }
 }
 
-void SpatialEngine::processSample (float xL, float xR, float& oL, float& oR) noexcept
+void SpatialEngine::stepRamps() noexcept
 {
     for (Ramp* r : { &rDirect, &rGL, &rGR, &rKs, &rTauL, &rTauR, &rProp, &rPropMix, &rWS, &rBassMix, &rRho, &rHpG,
                      &rOut, &rRoomX, &rMonoOut, &rSafe, &rPsiIn, &rMonoDepth, &rMonoGain,
                      &rM2SMix, &rM2SSide })
         r->step();
+}
 
+// Everything that does not depend on the output format: proximity, propagation, distance, air,
+// obstruction, width / Stereoizer and bass mono. Returns the direct mid, the side and the room feed.
+void SpatialEngine::directPath (float xL, float xR, float& M, float& side, float& roomIn) noexcept
+{
     // Input: mid/side of the source. Stereo sources keep S (scaled by "stereoness" psi).
-    float M = 0.5f * (xL + xR);
+    M = 0.5f * (xL + xR);
     const float rawS = 0.5f * (xL - xR);
     float S = rawS * rPsiIn.cur;
     detAccM += (double) M * M;
@@ -660,7 +711,7 @@ void SpatialEngine::processSample (float xL, float xR, float& oL, float& oR) noe
         S += rPropMix.cur * (sd - S);
     }
 
-    const float roomIn = M;
+    roomIn = M;
 
     // Direct path: distance gain, air absorption, obstruction.
     M *= rDirect.cur;
@@ -677,7 +728,7 @@ void SpatialEngine::processSample (float xL, float xR, float& oL, float& oR) noe
     }
 
     // Width: stereo S scaling + mono-compatible quadrature S (Stereoizer); bass mono on S only.
-    float side = S * rWS.cur;
+    side = S * rWS.cur;
     if (rM2SMix.cur > 0.0f || sM2S.target > 0.0 || sWiden.target > 0.0)
     {
         if (! m2sRunning)
@@ -706,6 +757,13 @@ void SpatialEngine::processSample (float xL, float xR, float& oL, float& oR) noe
     }
     else
         bassRunning = false;
+}
+
+void SpatialEngine::processSample (float xL, float xR, float& oL, float& oR) noexcept
+{
+    stepRamps();
+    float M, side, roomIn;
+    directPath (xL, xR, M, side, roomIn);
 
     // Speakers: amplitude + time panning (time applied to M only, S stays antisymmetric).
     const float lp = timeXover.processLow (M);
@@ -796,6 +854,64 @@ void SpatialEngine::processSample (float xL, float xR, float& oL, float& oR) noe
 
     oL = L * rOut.cur;
     oR = R * rOut.cur;
+}
+
+void SpatialEngine::processSampleSurround (float xL, float xR, float* outs) noexcept
+{
+    stepRamps();
+    float M, side, roomIn;
+    directPath (xL, xR, M, side, roomIn);
+    const int nCh = outLayout.numChannels;
+
+    // Direct sound over the front channels; the width (side) on L / R.
+    for (int c = 0; c < nCh; ++c)
+    {
+        rFront[(size_t) c].step();
+        outs[c] = rFront[(size_t) c].cur * M;
+    }
+    if (outLayout.left >= 0 && outLayout.right >= 0)
+    {
+        outs[outLayout.left] += rKs.cur * side;
+        outs[outLayout.right] -= rKs.cur * side;
+    }
+
+    // Room: reflections panned over the ring (ceiling -> heights), decorrelated tail per channel.
+    float monoSig = M;
+    const float x1 = rRoomX.cur;
+    for (int i = 0; i < 2; ++i)
+    {
+        const float wRoom = i == 1 ? x1 : 1.0f - x1;
+        auto& room = rooms[(size_t) i];
+        if (wRoom <= 0.0f || room.type() == roomOff)
+            continue;
+        float roomOut[maxOutputChannels], rm;
+        room.processMulti (roomIn, roomOut, rm);
+        for (int c = 0; c < nCh; ++c)
+            outs[c] += wRoom * roomOut[c];
+        monoSig += wRoom * rm;
+    }
+
+    // Mono Depth: a true mono render in the centre channel (dialogue convention).
+    if (rMonoDepth.cur > 0.0f)
+    {
+        const int target = outLayout.centre >= 0 ? outLayout.centre : -1;
+        for (int c = 0; c < nCh; ++c)
+        {
+            float mono = 0.0f;
+            if (target >= 0)
+                mono = c == target ? monoSig : 0.0f;
+            else if (c == outLayout.left || c == outLayout.right)
+                mono = monoSig * 0.70710678f;
+            outs[c] = rMonoDepth.cur >= 1.0f ? mono : outs[c] + rMonoDepth.cur * (mono - outs[c]);
+        }
+    }
+
+    if (occlusion.isActive())
+        for (int c = 0; c < nCh; ++c)
+            outs[c] = occlusion.process (c, outs[c]);
+
+    for (int c = 0; c < nCh; ++c)
+        outs[c] = outLayout.speakers[(size_t) c].lfe ? 0.0f : outs[c] * rOut.cur;
 }
 
 //==============================================================================
