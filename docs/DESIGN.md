@@ -10,7 +10,7 @@ Source/dsp/        czysty C++ (bez JUCE) — silnik, modele, testowalny i render
                      all-passy, siatka tercjowa, dopasowywanie charakterystyk (Levenberg–Marquardt)
   AcousticModels.h   ISO 9613-1, Maekawa, prawo masy / Sharp, materiały, model głowy Browna–Dudy,
                      odległość krytyczna, ważenie K (BS.1770)
-  RoomModel.h        wczesne odbicia (źródła pozorne) + FDN 8 linii
+  RoomModel.h        wczesne odbicia (źródła pozorne, dyfuzja) + FDN 16 linii
   Params.h           tabela parametrów (stałe ID), EngineParams, presety fabryczne
   SpatialEngine.*    kompletny tor przetwarzania
 Source/            wtyczka JUCE: procesor, stan, presety, UI (Source/ui)
@@ -42,8 +42,8 @@ wejście (1 lub 2 kanały)
 ### 3.1 Odległość
 - **Poziom:** g = (r_rec / r)^(n/6,02), gdzie n = `Rolloff` [dB na podwojenie odległości]. Dla n = 6 jest to prawo odwrotnych kwadratów. Wzmocnienie przy przybliżaniu jest ograniczone do +24 dB.
 - **Pochłanianie w powietrzu** wg ISO 9613-1 (wzory 3–5, zał. B). Tłumienie α(f)·max(0, r − r_rec) realizuje kaskada 5 półek wysokich + wzmocnienie szerokopasmowe. Wzmocnienia dopasowuje deterministyczny solwer Levenberga–Marquardta na siatce tercjowej 25 Hz–16 kHz, a częstotliwości półek są rozmieszczane względem punktu, w którym tłumienie osiąga 24 dB. Błąd wynosi ≤ 1 dB wszędzie tam, gdzie tłumienie < 24 dB (test dla 10–1000 m, 44,1–192 kHz). Rysunek: `img/air_absorption.png`.
-- **DRR i pogłos:** poziom pola rozproszonego jest ustawiony tak, by zrównał się z dźwiękiem bezpośrednim w odległości krytycznej r_c ≈ 0,057·√(Q·V/T60) (Kuttruff; Q = 2). Energia ogona FDN jest normalizowana na podstawie odpowiedzi impulsowej zmierzonej w `prepare()`.
-- **Wczesne odbicia:** metoda źródeł pozornych 1. rzędu (Allen i Berkley 1979) w prostopadłościanie. Każde odbicie ma własną drogę, poziom (wsp. odbicia √(1−ᾱ) z Sabine'a), kierunek i opóźnienie względem dźwięku bezpośredniego — stąd ITDG maleje wraz z odległością. Gdy źródło wychodzi poza pomieszczenie, jego pozycja jest przycinana do ścian (margines 0,3 m). W trybie Outdoor jest tylko odbicie od gruntu (wysokości 1,6 m, współczynnik 0,55 **[kalibracja]**).
+- **DRR i pogłos:** poziom pola rozproszonego jest ustawiony tak, by zrównał się z dźwiękiem bezpośrednim w odległości krytycznej r_c ≈ 0,057·√(Q·V/T60) (Kuttruff; Q = 2). Energia ogona FDN jest normalizowana na podstawie odpowiedzi impulsowej zmierzonej w `prepare()`, w paśmie 500 Hz – 2 kHz (tam obowiązuje model odległości krytycznej; ciemniejsza góra nie podnosi przez to reszty pasma).
+- **Wczesne odbicia:** metoda źródeł pozornych 1. rzędu (Allen i Berkley 1979) w prostopadłościanie. Każde odbicie ma własną drogę, poziom (wsp. odbicia √(1−ᾱ) z Sabine'a), kierunek i opóźnienie względem dźwięku bezpośredniego — stąd ITDG maleje wraz z odległością. Gdy źródło wychodzi poza pomieszczenie, jego pozycja jest przycinana do ścian z marginesem 12 % krótszego wymiaru (0,3–3 m) — źródło „przyklejone” do ściany dawałoby sztuczny filtr grzebieniowy o krótkim opóźnieniu. Odbicie od podłogi w pomieszczeniach ma współczynnik ×0,6 (meble, siedzenia, ludzie) **[kalibracja]**. Każde odbicie jest tłumione w górze: jednobiegunowy filtr ściany (grunt 1,5 kHz, fasady 5 kHz, pomieszczenia 2,5–6 kHz zależnie od HF ratio) razem z pochłanianiem powietrza na średniej drodze odbić (ISO 9613-1, dopasowanie przy 8 kHz), a następnie **rozpraszane**: 3 krótkie all-passy na kanał (0,6–2,9 ms × skala pomieszczenia, g = 0,5–0,6) zamieniają każde dyskretne odbicie w gęstą wiązkę. Dzięki temu odbicia nie tworzą z dźwiękiem bezpośrednim wyraźnego filtra grzebieniowego (efekt „phasera/flangera”, szczególnie przy automatyce odległości). W trybie Outdoor jest tylko odbicie od gruntu (wysokości 1,6 m, współczynnik 0,55 **[kalibracja]**).
 - **Przestrzenie [kalibracja]** (16; A = neutralny, B = wytłumiony, C = żywy):
 
   | Typ | Wymiary [m] | T60 [s] | T60 HF/mid | Uwagi |
@@ -57,7 +57,8 @@ wejście (1 lub 2 kanały)
   | Hall A / B / C | 25×20×10 / 30×22×12 / 50×20×20 | 1,8 / 1,3 / 4,0 | 0,45 / 0,5 / 0,55 | B = teatr, C = kościół |
 
   Stan w wersji 1 miał 6 przestrzeni (Off, Outdoor, Small, Medium, Large, Hall). Przy wczytywaniu projektu lub presetu z v1 indeks jest mapowany na warianty A (`migrateRoomIndexV1`, `stateVersion` = 2).
-- **FDN:** 8 linii, macierz Householdera, jednobiegunowe tłumienie w pętli (Jot i Chaigne 1991), dekorelowane wyjścia L/P, brak modulacji (determinizm).
+- **FDN:** 16 linii o długościach będących liczbami pierwszymi, rozłożonych w stosunku 1 : 2,3 wokół czasu średniej drogi swobodnej (0,75·4V/(S·c), 5–35 ms). Macierz sprzężenia: znormalizowana macierz Hadamarda 16×16 (szybka transformata Walsha-Hadamarda) — każda linia zasila wszystkie pozostałe po równo. Macierz Householdera tej wielkości zostawia w każdej linii 7/8 jej własnego sygnału, więc linie dzwonią jak osobne filtry grzebieniowe. Wejście przechodzi przez filtr ściany i 4 all-passy dyfuzyjne (1,3–5,3 ms × skala pomieszczenia), a ogon startuje od **pierwszego** odbicia (pole rozproszone narasta od początku, bez „dziury” przed ogonem). Wyjścia L, P i mono to ortogonalne wiersze macierzy Hadamarda. Brak modulacji (determinizm).
+- **Zanik zależny od częstotliwości:** w każdej linii (Jot) wzmocnienie dla T60 średnich, półka wysoka 1. rzędu 2,5 kHz dla ścian (T60·HF ratio) oraz jednobiegunowy filtr **pochłaniania powietrza** dopasowany przy 8 kHz do α(8 kHz) − α(1 kHz) wg ISO 9613-1 (20 °C, 50 %) na czas przelotu linii. W dużych wnętrzach powietrze dominuje w górnych oktawach: kościół (T60 4 s) ma T30 ≈ 1,3 s przy 8 kHz i ≈ 0,7 s przy 16 kHz (wcześniej 3,3 s / 2,6 s, co dawało „syczący”, biały ogon). Pomiary (T30 per oktawa, gęstość ech wg Abela i Huanga, widmo ogona, siła filtra grzebieniowego) są testami regresji: `tests/EngineTests.cpp`, test 14f.
 - **Efekt zbliżeniowy:** stosunek odpowiedzi mikrofonu gradientowego 1. rzędu w nowej i nagranej odległości, H(s) = (s + B·c/r)/(s + B·c/r_rec), gdzie B to udział składowej gradientowej (omni 0, kardioida 0,5, ósemka 1). Jest to półka ograniczona — przy oddalaniu usuwa podbicie basu z bliskiego nagrania.
 - **Opóźnienie propagacji / Doppler:** linia opóźniająca z interpolacją Lagrange'a 3. rzędu, maks. 1000 m / c ≈ 2,9 s. Nie jest zgłaszane hostowi jako latencja (to efekt, nie kompensacja).
 
@@ -67,7 +68,7 @@ wejście (1 lub 2 kanały)
 - **Headphones:** model sferycznej głowy Browna i Dudy (1998): a = 8,75 cm, opóźnienia per ucho wg ich wzoru (3) (ITD Woodwortha), filtr cienia głowy 1-biegun/1-zero z α(θ) (α_min = 0,1, θ_min = 150°). Filtr jest znormalizowany do α(90°), więc źródło z przodu brzmi płasko. Opóźnienie fazowe filtra (przy 750 Hz) jest odejmowane, żeby całkowite ITD w paśmie < 1,5 kHz odpowiadało wzorowi Woodwortha (test: 0,656 ± 0,02 ms). Źródło stereo to dwa wirtualne źródła rozstawione o ±30°·Width. Poniżej 1 m płynnie włącza się paralaksa akustyczna (1/r osobno dla każdego ucha). Rysunek: `img/headphones.png`.
 
 ### 3.2a Mono Depth
-Tryb ściśle monofoniczny. Sygnał wyjściowy to M ścieżki bezpośredniej (odległość, powietrze, efekt zbliżeniowy, obstruction) plus **dedykowane wyjście mono pomieszczenia**: wczesne odbicia z wagą √(g_L² + g_P²) (bez panoramy) oraz ogon FDN z wszystkich 8 linii (wzór znaków {+,+,+,+,−,−,−,−}·0,5). Energia tego wyjścia jest równa energii L+P wersji stereo (test: ±1,5 dB), więc przełączanie nie zmienia bilansu pogłosu. Składanie stereo pogłosu do mono dałoby tylko 4 linie i ubytki gęstości. Przy wyjściu stereo L = P = mono·g_c (g_c = prawo panoramy w centrum), co jest bitowo równe źródłu w centrum. Na ścieżce mono (1→1) używana jest ta sama ścieżka. Przełączanie crossfade'em 30 ms.
+Tryb ściśle monofoniczny. Sygnał wyjściowy to M ścieżki bezpośredniej (odległość, powietrze, efekt zbliżeniowy, obstruction) plus **dedykowane wyjście mono pomieszczenia**: wczesne odbicia z wagą √(g_L² + g_P²) (bez panoramy) oraz ogon FDN z wszystkich 16 linii (własny, ortogonalny wiersz macierzy Hadamarda, waga √2/4). Energia tego wyjścia jest równa energii L+P wersji stereo (test: ±1,5 dB), więc przełączanie nie zmienia bilansu pogłosu. Składanie stereo pogłosu do mono dałoby tylko 4 linie i ubytki gęstości. Przy wyjściu stereo L = P = mono·g_c (g_c = prawo panoramy w centrum), co jest bitowo równe źródłu w centrum. Na ścieżce mono (1→1) używana jest ta sama ścieżka. Przełączanie crossfade'em 30 ms.
 
 ### 3.2b Equalized Ambience
 Główny przełącznik automatycznego EQ zależnego od odległości i położenia (domyślnie ON). Obejmuje: pochłanianie powietrza, kompensację efektu zbliżeniowego oraz *position EQ* — półkę wysoką 5 kHz na kanale oddalonym od źródła (tryb Speakers), −2,5 dB·|pan| **[kalibracja]**, działającą tylko na M (Width pozostaje zgodne z mono). Po wyłączeniu odpowiedź częstotliwościowa jest płaska (test ±0,3 dB), a poziom w paśmie środkowym się nie zmienia (±0,5 dB).
@@ -80,10 +81,10 @@ Konwersja mono → stereo ze stałą sumą mono i bez zabarwienia kanałów (`So
 - Różnica faz między kanałami zmienia znak od pasma do pasma, co daje rozłożony obraz (lateralizacja zależna od częstotliwości; Orban 1970, Gerzon 1992) bez echa i bez ubytków w mono.
 - a = 0,7·Width **[kalibracja]**. Korelacja L/P dla szumu różowego: 0,81 przy 100 %, 0,41 przy 200 % (bas mono wlicza się do korelacji).
 - Aktywne, gdy źródło jest mono: wejście 1-kanałowe, *Input = Mono*, albo detektor treści mono na wejściu stereo (energia S/M < −40 dB → mono, > −30 dB → stereo, histereza, stała czasowa 150 ms, decyzja wstrzymana w ciszy < −90 dBFS). Prawdziwe stereo: test zerowy ≤ −120 dB. Przełączanie crossfade'em 30 ms.
-- Przy włączonym Mono → Stereo dekorelator z punktu 3.3 (poszerzanie mono > 100 %) jest wyłączany; w trybie Headphones dwa wirtualne źródła rozstawia się o ±30°·Width jak dla stereo. Koszt: ok. 0,5 % rdzenia przy 48 kHz.
+- Poszerzanie mono powyżej 100 % (punkt 3.3) używa tego samego Stereoizera; w trybie Headphones dwa wirtualne źródła rozstawia się o ±30°·Width jak dla stereo. Koszt: ok. 0,5 % rdzenia przy 48 kHz.
 
 ### 3.3 Szerokość
-Dla źródeł stereo S jest mnożone przez Width. Źródła mono poszerza dekorelator (4 all-passy Schroedera, 3,1 / 4,7 / 6,3 / 11,3 ms, g = 0,6; zasada Kendalla 1995) — powstały sygnał S jest odejmowany w sumie mono. Głębokość przy 200 % wynosi 0,8 **[kalibracja]**. Bass Mono to filtr górnoprzepustowy LR4 (2 × SVF Butterwortha) na S.
+Dla źródeł stereo S jest mnożone przez Width. Źródła mono powyżej 100 % poszerza Stereoizer (punkt 3.2c): S w kwadraturze do M′, a = 1,0·(Width − 1) **[kalibracja]**, więc każdy kanał ma płaską charakterystykę, a suma mono zachowuje moduł źródła. Wcześniejszy dekorelator z all-passów Schroedera (Kendall 1995) dawał w każdym kanale filtr grzebieniowy ok. ±5 dB (efekt phasera) i został usunięty. Bass Mono to filtr górnoprzepustowy LR4 (2 × SVF Butterwortha) na S.
 
 ### 3.4 Przeszkody
 - **Obstruction:** krzywa Maekawy ΔL = 10·log10(3 + 20N), N = 2δf/c, ograniczona do 25 dB, realizowana kaskadą 5 półek (błąd ≤ 1,5 dB w zakresie 125 Hz–8 kHz). Działa tylko na dźwięk bezpośredni.
@@ -164,7 +165,7 @@ Przełączniki są zaimplementowane jako dwustanowe parametry wyboru. Ich znorma
 | 13. Neutralność, latencja 0 | ✅ (null ≤ −120 dBFS) |
 | pluginval, strictness 10 | ✅ |
 | Walidator VST3 Steinberga | ✅ 47/47 |
-| CPU (48 kHz, stereo, maszyna wirtualna Linux x64, samo przetwarzanie) | ok. 0,5 % rdzenia (Room Off), ok. 1,5 % (Medium A) |
+| CPU (48 kHz, stereo, maszyna wirtualna Linux x64, samo przetwarzanie) | ok. 0,35 % rdzenia (Room Off), ok. 1,9 % (Medium A), ok. 0,85 % (Mono → Stereo) |
 
 Oba wyniki mieszczą się w celach (≤ 1 % i ≤ 3 %). Pomiar pochodzi z maszyny wirtualnej w chmurze i jest informacyjny — należy go powtórzyć na docelowym sprzęcie (`ambience_tests`, test 15).
 

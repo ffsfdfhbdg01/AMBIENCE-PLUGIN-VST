@@ -91,11 +91,11 @@ private:
 
     // Smoothed control values (per tick)
     Smooth sLogDist, sLogRec, sRolloff, sPan, sTimePan, sPsi, sRho, sMonoSafe, sWidth, sPropMix,
-        sMicB, sAmtObs, sAmtOcc, sBassMix, sAutoGain, sOutput, sRoomLevel, sDecay, sMonoDepth, sEq, sM2S;
+        sMicB, sAmtObs, sAmtOcc, sBassMix, sAutoGain, sOutput, sRoomLevel, sDecay, sMonoDepth, sEq, sM2S, sWiden;
     double tickCoeff = 0.0, fastCoeff = 0.0;
 
     // Per-sample ramps
-    Ramp rDirect, rGL, rGR, rKs, rTauL, rTauR, rProp, rPropMix, rWS, rWD, rBassMix, rRho, rHpG, rOut, rRoomX, rMonoOut;
+    Ramp rDirect, rGL, rGR, rKs, rTauL, rTauR, rProp, rPropMix, rWS, rBassMix, rRho, rHpG, rOut, rRoomX, rMonoOut;
     std::array<Ramp, 4> rHpDelay, rHpGain; // [source*2 + ear]
     Ramp rSafe, rPsiIn, rMonoDepth, rMonoGain, rM2SMix, rM2SSide;
     Biquad posEqL, posEqR;
@@ -105,7 +105,6 @@ private:
     FirstOrder prox[2];
     DelayLine propLine[2];
     FittedCascade<2> air, obstruction, occlusion;
-    AllpassStage decor[4];
     Stereoizer stereoizer;
     bool m2sRunning = false;
 
@@ -134,7 +133,7 @@ private:
     double autoGainTargetDb = 0.0, autoGainCurrentDb = 0.0;
     double bassFreq = 80.0;
     int bassFreqIndex = 0;
-    bool decorActive = false, decorRunning = false, bassRunning = false;
+    bool bassRunning = false;
 };
 
 } // namespace amb

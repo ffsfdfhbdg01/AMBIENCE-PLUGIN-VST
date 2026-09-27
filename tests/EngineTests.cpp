@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <functional>
 #include <string>
+#include <tuple>
 
 #include "../Source/dsp/AcousticModels.h"
 #include "../Source/dsp/SpatialEngine.h"
@@ -237,7 +238,7 @@ int main()
                 }
     } });
 
-    tests.push_back ({ "6. Width: L+R independent of Width; Width 0 -> L = R", [&]
+    tests.push_back ({ "6. Width: L+R independent of Width (mono sources: magnitude); Width 0 -> L = R", [&]
     {
         const int n = 24000;
         const auto xl = pinkNoise (n, 1), xr = pinkNoise (n, 2);
@@ -252,6 +253,28 @@ int main()
                 for (float w : { 0.0f, 150.0f, 200.0f })
                 {
                     p.width = w;
+                    if (! stereo && w > 100.0f)
+                    {
+                        // Mono sources widen through the Stereoizer: L + R is an all-pass of the
+                        // source, so its magnitude (not its waveform) is unchanged.
+                        for (double f : { 100.0, 300.0, 1000.0, 3000.0, 8000.0 })
+                        {
+                            auto q = p;
+                            const auto a = render (q, { sine (f, fs, 24000) }, 2);
+                            q.width = 100;
+                            const auto b = render (q, { sine (f, fs, 24000) }, 2);
+                            std::vector<float> sa ((size_t) n), sb ((size_t) n);
+                            for (int i = 0; i < n; ++i)
+                            {
+                                sa[(size_t) i] = a[0][(size_t) i] + a[1][(size_t) i];
+                                sb[(size_t) i] = b[0][(size_t) i] + b[1][(size_t) i];
+                            }
+                            near (gainToDb (rms (sa.data() + 4800, n - 4800) / rms (sb.data() + 4800, n - 4800)), 0.0, 0.05,
+                                  "mono source: mono sum level at " + std::to_string ((int) f) + " Hz (pan " + std::to_string (pan)
+                                      + ", width " + std::to_string ((int) w) + ")");
+                        }
+                        continue;
+                    }
                     const auto o = render (p, in, 2);
                     double m = 0;
                     for (int i = 4800; i < n; ++i)
@@ -703,6 +726,150 @@ int main()
         for (size_t i = 1; i < sw[0].size(); ++i)
             maxStep = std::max (maxStep, (double) std::abs (sw[0][i] - sw[0][i - 1]));
         check (maxStep < 0.05, "no clicks when toggling (max step " + std::to_string (maxStep) + ")");
+    } });
+
+    tests.push_back ({ "14f. Room acoustics: frequency-dependent decay, dense tail, no comb filtering", [&]
+    {
+        auto octave = [&] (const std::vector<float>& x, double fc)
+        {
+            Biquad h1, h2, l1, l2;
+            h1.set (designBiquadHz (BiquadType::highPass, fs, fc / std::sqrt (2.0), 0.707, 0));
+            h2 = h1;
+            l1.set (designBiquadHz (BiquadType::lowPass, fs, std::min (fc * std::sqrt (2.0), 0.45 * fs), 0.707, 0));
+            l2 = l1;
+            std::vector<float> y (x.size());
+            for (size_t i = 0; i < x.size(); ++i)
+                y[i] = l2.process (l1.process (h2.process (h1.process (x[i]))));
+            return y;
+        };
+        auto t30 = [&] (const std::vector<float>& l, const std::vector<float>& r)
+        {
+            std::vector<double> edc (l.size());
+            double acc = 0;
+            for (size_t i = l.size(); i-- > 0;)
+                edc[i] = acc += (double) l[i] * l[i] + (double) r[i] * r[i];
+            int i5 = -1, i35 = -1;
+            for (size_t i = 0; i < edc.size() && i35 < 0; ++i)
+            {
+                const double db = 10.0 * std::log10 (edc[i] / edc[0] + 1.0e-30);
+                if (i5 < 0 && db <= -5.0) i5 = (int) i;
+                if (db <= -35.0) i35 = (int) i;
+            }
+            return i5 < 0 || i35 < 0 ? -1.0 : 2.0 * (i35 - i5) / fs;
+        };
+        // Normalised echo density (Abel & Huang 2006) in a 20 ms window.
+        auto ned = [&] (const std::vector<float>& h, double t0)
+        {
+            const int a = (int) (t0 * fs), b = a + (int) (0.02 * fs);
+            double e = 0;
+            for (int i = a; i < b; ++i)
+                e += (double) h[(size_t) i] * h[(size_t) i];
+            const double sd = std::sqrt (e / (b - a));
+            int count = 0;
+            for (int i = a; i < b; ++i)
+                count += std::abs (h[(size_t) i]) > sd ? 1 : 0;
+            return count / (double) (b - a) / 0.3173;
+        };
+        auto bandEnergy = [&] (const std::vector<float>& x, double fc, int a, int b)
+        {
+            const auto y = octave (x, fc);
+            double e = 0;
+            for (int i = a; i < b; ++i)
+                e += (double) y[(size_t) i] * y[(size_t) i];
+            return e;
+        };
+        for (int room = 0; room < numRoomTypes; ++room)
+        {
+            if (! roomHasTail (room))
+                continue;
+            RoomModel rm;
+            rm.prepare (fs);
+            rm.configure (room, 1.0);
+            rm.setGeometry (3.0, 0.3, 1.0, 1.0, 1.0, 32);
+            rm.snapGeometry();
+            const int n = (int) (fs * (roomSpec (room).t60 * 2.0 + 0.3));
+            std::vector<float> l ((size_t) n), r ((size_t) n);
+            for (int i = 0; i < n; ++i)
+                rm.process (i == 0 ? 1.0f : 0.0f, l[(size_t) i], r[(size_t) i]);
+            const std::string name = roomSpec (room).name;
+            const double t500 = t30 (octave (l, 500), octave (r, 500)), t8k = t30 (octave (l, 8000), octave (r, 8000));
+            const bool closed = roomSpec (room).kind == RoomKind::room; // open spaces: reflections dominate
+            if (closed)
+                near (t500 / roomSpec (room).t60, 1.0, 0.12, name + ": T30 at 500 Hz matches the room T60");
+            check (t8k < 0.8 * t500, name + ": high frequencies decay faster (8 kHz " + std::to_string (t8k) + " s)");
+            // Dense, smooth tail: no audible discrete echoes once the reverb has built up.
+            check (ned (l, 0.2) > 0.75, name + ": echo density at 200 ms " + std::to_string (ned (l, 0.2)));
+            if (roomSpec (room).kind == RoomKind::room)
+                check (ned (l, 0.08) > 0.75, name + ": echo density at 80 ms " + std::to_string (ned (l, 0.08)));
+            // No white "hiss": the 8 kHz octave carries less tail energy than the 1 kHz octave.
+            const int a = (int) (0.1 * fs), b = std::min (n, (int) (0.6 * fs));
+            if (closed)
+                check (bandEnergy (l, 8000, a, b) < bandEnergy (l, 1000, a, b), name + ": tail darker at 8 kHz than at 1 kHz");
+        }
+        {
+            // Church: air absorption dominates the top octaves (ISO 9613-1): T30(8 kHz) well below 2 s.
+            RoomModel rm;
+            rm.prepare (fs);
+            rm.configure (15, 1.0);
+            rm.setGeometry (3.0, 0.0, 1.0, 1.0, 1.0, 32);
+            rm.snapGeometry();
+            const int n = (int) (fs * 8.5);
+            std::vector<float> l ((size_t) n), r ((size_t) n);
+            for (int i = 0; i < n; ++i)
+                rm.process (i == 0 ? 1.0f : 0.0f, l[(size_t) i], r[(size_t) i]);
+            const double t8k = t30 (octave (l, 8000), octave (r, 8000)), t16k = t30 (octave (l, 16000), octave (r, 16000));
+            check (t8k < 1.8 && t16k < 1.1, "church: T30 8 kHz " + std::to_string (t8k) + " s, 16 kHz " + std::to_string (t16k) + " s");
+        }
+        // Comb filtering (phaser/flanger colour): whitened autocorrelation of the first 40 ms of
+        // the full engine response at lags 0.3-15 ms. One reflection of relative gain a gives
+        // a / (1 + a^2), i.e. 0.5 for a full-depth comb.
+        auto comb = [&] (EngineParams p)
+        {
+            std::vector<float> x (48000, 0.0f);
+            x[0] = 1.0f;
+            const auto o = render (p, { x }, 2);
+            double worst = 0;
+            const int N = (int) (0.04 * fs);
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                std::vector<double> h ((size_t) N);
+                for (int i = 0; i < N; ++i)
+                    h[(size_t) i] = o[(size_t) ch][(size_t) i] - (i > 0 ? o[(size_t) ch][(size_t) (i - 1)] : 0.0f);
+                double r0 = 0;
+                for (double v : h)
+                    r0 += v * v;
+                for (int lag = (int) (0.0003 * fs); lag < (int) (0.015 * fs); ++lag)
+                {
+                    double c = 0;
+                    for (int i = 0; i + lag < N; ++i)
+                        c += h[(size_t) i] * h[(size_t) (i + lag)];
+                    worst = std::max (worst, std::abs (c) / r0);
+                }
+            }
+            return worst;
+        };
+        for (auto [room, dist, limit] : { std::tuple { 1, 10.0f, 0.08 }, std::tuple { 1, 50.0f, 0.15 }, std::tuple { 7, 2.0f, 0.1 },
+                                          std::tuple { 15, 2.0f, 0.08 }, std::tuple { 15, 10.0f, 0.12 } })
+        {
+            EngineParams p;
+            p.room = room;
+            p.distance = dist;
+            p.pan = 20;
+            const double c = comb (p);
+            check (c < limit, std::string (roomSpec (room).name) + " at " + std::to_string ((int) dist) + " m: comb strength " + std::to_string (c));
+        }
+        // Mono widening above 100 % keeps each channel flat (no comb from a decorrelator).
+        EngineParams p = dryParams();
+        p.width = 200;
+        double lo = 1e9, hi = -1e9;
+        for (double f : { 200.0, 400.0, 700.0, 1000.0, 1500.0, 2500.0, 4000.0, 6000.0, 9000.0 })
+        {
+            const auto t = render (p, { sine (f, fs, 24000) }, 2);
+            const double l = gainToDb (rms (t[0].data() + 9600, 14000));
+            lo = std::min (lo, l);
+            hi = std::max (hi, l);
+        }
+        check (hi - lo < 3.5, "mono at width 200 %: per-channel response within " + std::to_string (hi - lo) + " dB");
     } });
 
     tests.push_back ({ "15. CPU benchmark (informative, processing only)", [&]

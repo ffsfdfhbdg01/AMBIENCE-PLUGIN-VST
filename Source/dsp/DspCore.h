@@ -282,35 +282,6 @@ private:
 };
 
 //==============================================================================
-// Schroeder all-pass used as a decorrelator stage (Kendall 1995 style decorrelation).
-class AllpassStage
-{
-public:
-    void prepare (int delaySamples, float gain)
-    {
-        buf.assign ((size_t) std::max (1, delaySamples), 0.0f);
-        pos = 0;
-        g = gain;
-    }
-
-    void reset() noexcept { std::fill (buf.begin(), buf.end(), 0.0f); pos = 0; }
-
-    float process (float x) noexcept
-    {
-        const float d = buf[(size_t) pos];
-        const float v = x + g * d;
-        buf[(size_t) pos] = flushDenormal (v);
-        pos = (pos + 1) % (int) buf.size();
-        return d - g * v;
-    }
-
-private:
-    std::vector<float> buf;
-    int pos = 0;
-    float g = 0.5f;
-};
-
-//==============================================================================
 // 1/3-octave analysis grid (IEC 61260 base-ten mid-band frequencies) used by the response
 // fitter and by the model-based auto gain.
 inline std::vector<double> thirdOctaveGrid (double sampleRate, double fLow = 25.0, double fHigh = 16000.0)
