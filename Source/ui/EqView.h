@@ -67,23 +67,28 @@ private:
 };
 
 // EQ section of the Advanced panel: three tabs (input / output / reverb only), on/off and the graph.
-class EqSection : public juce::Component
+// A tab shows a dot while its EQ is on and not neutral.
+class EqSection : public juce::Component, private juce::Timer
 {
 public:
     explicit EqSection (juce::AudioProcessorValueTreeState& state);
+    ~EqSection() override { stopTimer(); }
     void resized() override;
     void paint (juce::Graphics&) override;
+    void paintOverChildren (juce::Graphics&) override;
     void setRoomOff (bool off);
 
 private:
     void selectTab (int index);
+    bool isActive (int index) const;
+    void timerCallback() override;
 
     juce::AudioProcessorValueTreeState& apvts;
     juce::TextButton tabs[3];
     juce::ToggleButton onToggle { "EQ On" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> onAttachment;
     EqGraph graph;
-    int current = 0;
+    int current = 0, activeMask = 0;
     bool roomOff = false;
 };
 } // namespace ui

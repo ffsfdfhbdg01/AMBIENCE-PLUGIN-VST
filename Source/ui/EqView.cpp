@@ -118,13 +118,16 @@ double EqGraph::yToDb (float y) const { return (plot.getCentreY() - y) / (plot.g
 
 juce::Point<float> EqGraph::nodePos (int band, const amb::EqParams& p) const
 {
+    // Cut points sit on the curve (about 3 dB down at the cut-off), so they do not cover a shelf at
+    // the same frequency; shelf and peak points show their gain.
+    auto onCurve = [&] (double f) { return dbToY (std::clamp (amb::ParametricEq<1>::responseDb (p, displayRate, f), -rangeDb, rangeDb)); };
     switch (band)
     {
-        case lowCut: return { freqToX (p.lowCut), dbToY (0.0) };
+        case lowCut: return { freqToX (p.lowCut), onCurve (p.lowCut) };
         case lowShelf: return { freqToX (p.lowShelfFreq), dbToY (p.lowShelfGain) };
         case peak: return { freqToX (p.peakFreq), dbToY (p.peakGain) };
         case highShelf: return { freqToX (p.highShelfFreq), dbToY (p.highShelfGain) };
-        case highCut: return { freqToX (p.highCut), dbToY (0.0) };
+        case highCut: return { freqToX (p.highCut), onCurve (p.highCut) };
         default: return {};
     }
 }
@@ -227,58 +230,69 @@ void EqGraph::paint (juce::Graphics& g)
     g.setColour (curveColour);
     g.strokePath (curve, juce::PathStrokeType (1.7f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
-    // Points
+    // Points, then their labels on top. A label that would cover another point or label is left
+    // out, except the one of the point under the mouse.
     static const char* labels[numBands] = { "LC", "LS", "P", "HS", "HC" };
     const bool bandOn[numBands] = { p.lowCut > 20.5f, std::abs (p.lowShelfGain) > 0.05f, std::abs (p.peakGain) > 0.05f,
                                     std::abs (p.highShelfGain) > 0.05f, p.highCut < 19500.0f };
+    const int hot = dragging != none ? dragging : hover;
+    juce::Rectangle<float> dots[numBands];
     for (int b = 0; b < numBands; ++b)
     {
         const auto c = nodePos (b, p);
-        const bool hot = b == hover || b == dragging;
-        const float r = hot ? 6.5f : 5.0f;
+        const float r = b == hot ? 6.5f : 5.0f;
+        dots[b] = { c.x - r, c.y - r, 2.0f * r, 2.0f * r };
         const auto colour = (b == lowCut || b == highCut) ? colours::cool : colours::accent;
         if (bandOn[b] && p.on)
         {
             g.setColour (colour);
-            g.fillEllipse (c.x - r, c.y - r, 2.0f * r, 2.0f * r);
+            g.fillEllipse (dots[b]);
         }
         else
         {
             g.setColour (colours::surfaceRaised);
-            g.fillEllipse (c.x - r, c.y - r, 2.0f * r, 2.0f * r);
+            g.fillEllipse (dots[b]);
             g.setColour (colour.withAlpha (p.on ? 1.0f : 0.5f));
-            g.drawEllipse (c.x - r, c.y - r, 2.0f * r, 2.0f * r, 1.4f);
+            g.drawEllipse (dots[b], 1.4f);
         }
-        g.setColour (hot ? colours::text : colours::textDim);
-        g.setFont (AmbienceLookAndFeel::font (9.0f, true));
-        const float lx = std::clamp (c.x - 12.0f, plot.getX() - 6.0f, plot.getRight() - 18.0f);
-        g.drawText (labels[b], juce::Rectangle<float> (lx, c.y - r - 13.0f, 24.0f, 11.0f), juce::Justification::centred);
+    }
+    juce::Array<juce::Rectangle<float>> taken;
+    g.setFont (AmbienceLookAndFeel::font (9.0f, true));
+    for (int i = -1; i < numBands; ++i)
+    {
+        const int b = i < 0 ? hot : i;
+        if (b == none || (i >= 0 && b == hot))
+            continue;
+        const float lx = std::clamp (dots[b].getCentreX() - 12.0f, plot.getX() - 6.0f, plot.getRight() - 18.0f);
+        const juce::Rectangle<float> lr (lx, dots[b].getY() - 13.0f, 24.0f, 11.0f);
+        bool covers = std::any_of (taken.begin(), taken.end(), [&] (const auto& o) { return o.intersects (lr); });
+        for (int o = 0; o < numBands; ++o)
+            covers = covers || (o != b && dots[o].intersects (lr));
+        if (covers && b != hot)
+            continue;
+        taken.add (lr);
+        g.setColour (b == hot ? colours::text : colours::textDim);
+        g.drawText (labels[b], lr, juce::Justification::centred);
     }
 
-    // Read-out
+    // Read-out: the point under the mouse, else the note (e.g. no room) or the hints.
     g.setFont (AmbienceLookAndFeel::font (10.5f, true));
-    const int shown = dragging != none ? dragging : hover;
     const auto readout = plot.withHeight (14.0f).translated (0.0f, 2.0f).reduced (6.0f, 0.0f);
-    if (shown != none)
+    if (hot != none)
     {
         g.setColour (colours::text);
-        g.drawText (describe (shown, p), readout, juce::Justification::centredRight);
+        g.drawText (describe (hot, p), readout, juce::Justification::centredRight);
+    }
+    else if (note.isNotEmpty())
+    {
+        g.setColour (colours::warn);
+        g.drawText (eqName + juce::String::fromUTF8 ("  \xc2\xb7  ") + note, readout, juce::Justification::centredRight);
     }
     else
     {
         g.setColour (colours::textFaint);
         g.drawText (eqName + (p.on ? "" : "  (OFF)") + juce::String::fromUTF8 ("  \xc2\xb7  drag points \xc2\xb7 wheel: Q \xc2\xb7 double-click: reset"),
                     readout, juce::Justification::centredRight);
-    }
-
-    if (note.isNotEmpty())
-    {
-        const auto box = plot.withSizeKeepingCentre (std::min (plot.getWidth() - 20.0f, 330.0f), 26.0f);
-        g.setColour (colours::surfaceRaised.withAlpha (0.92f));
-        g.fillRoundedRectangle (box, 5.0f);
-        g.setColour (colours::textDim);
-        g.setFont (AmbienceLookAndFeel::font (11.5f, true));
-        g.drawText (note, box, juce::Justification::centred);
     }
 }
 
@@ -421,6 +435,41 @@ EqSection::EqSection (juce::AudioProcessorValueTreeState& state) : apvts (state)
     addAndMakeVisible (onToggle);
     addAndMakeVisible (graph);
     selectTab (0);
+    startTimerHz (10);
+}
+
+bool EqSection::isActive (int index) const
+{
+    const amb::pid::EqIds* sets[3] = { &amb::pid::eqIn, &amb::pid::eqOut, &amb::pid::eqRev };
+    const auto& ids = *sets[index];
+    auto v = [this] (const char* id) { return apvts.getRawParameterValue (id)->load(); };
+    return v (ids.on) > 0.5f
+           && (v (ids.lowCut) > 20.5f || std::abs (v (ids.lowShelfGain)) > 0.05f || std::abs (v (ids.peakGain)) > 0.05f
+               || std::abs (v (ids.highShelfGain)) > 0.05f || v (ids.highCut) < 19500.0f);
+}
+
+void EqSection::timerCallback()
+{
+    int mask = 0;
+    for (int i = 0; i < 3; ++i)
+        mask |= isActive (i) ? 1 << i : 0;
+    if (mask != activeMask)
+    {
+        activeMask = mask;
+        repaint();
+    }
+}
+
+void EqSection::paintOverChildren (juce::Graphics& g)
+{
+    // A dot on each tab whose EQ is doing something.
+    for (int i = 0; i < 3; ++i)
+        if ((activeMask >> i) & 1)
+        {
+            const auto t = tabs[i].getBounds().toFloat();
+            g.setColour (i == current ? colours::background : colours::accent);
+            g.fillEllipse (t.getRight() - 12.0f, t.getCentreY() - 2.5f, 5.0f, 5.0f);
+        }
 }
 
 void EqSection::selectTab (int index)
@@ -433,7 +482,8 @@ void EqSection::selectTab (int index)
     onAttachment.reset();
     onAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (apvts, sets[current]->on, onToggle);
     graph.setEq (*sets[current], names[current]);
-    graph.setNote (current == 2 && roomOff ? juce::String::fromUTF8 ("Room is Off \xe2\x80\x94 there is no reverb to EQ") : juce::String());
+    repaint();
+    graph.setNote (current == 2 && roomOff ? "Room is Off: no reverb to EQ" : juce::String());
 }
 
 void EqSection::setRoomOff (bool off)
@@ -441,7 +491,7 @@ void EqSection::setRoomOff (bool off)
     if (roomOff == off)
         return;
     roomOff = off;
-    graph.setNote (current == 2 && roomOff ? juce::String::fromUTF8 ("Room is Off \xe2\x80\x94 there is no reverb to EQ") : juce::String());
+    graph.setNote (current == 2 && roomOff ? "Room is Off: no reverb to EQ" : juce::String());
 }
 
 void EqSection::paint (juce::Graphics& g)
