@@ -10,10 +10,14 @@ namespace
     constexpr double widenDepth = 1.0;           // mono-source widening (Stereoizer side gain) at 200 % (listening calibration)
     constexpr double stereoSideRatio = 0.3;      // assumed S/M energy of stereo material (auto gain model)
     constexpr double m2sDepth = 0.7;             // Mono to Stereo side gain at 100 % width (listening calibration)
+    constexpr double m2sKeepDepth = 1.0;         // ... with Keep Mono: only the recorded room is widened, so it can
+                                                 // be decorrelated fully (a diffuse field has a low correlation)
     constexpr double m2sSidePower = 0.4;         // mean |S/M|^2 of the Stereoizer band weighting (auto gain model)
-    constexpr double detectStereoRatio = 1.0e-3; // Mono to Stereo detector: S/M energy above -30 dB -> stereo content
-    constexpr double detectMonoRatio = 1.0e-4;   // ... below -40 dB -> mono content (hysteresis)
-    constexpr double detectFloor = 1.0e-9;       // mean-square mid below ~-90 dBFS: hold the decision
+    constexpr double detectMonoCorr = 0.985;     // Mono to Stereo detector: |correlation| above -> mono content
+    constexpr double detectStereoCorr = 0.95;    // ... below -> stereo content (hysteresis)
+    constexpr double detectOneSided = 1.0e-4;    // one channel 40 dB below the other -> mono in one channel
+    constexpr double detectGate = 1.0e-3;        // analyse only within 30 dB of the recent peak (not pauses)
+    constexpr double detectFloor = 1.0e-10;      // ... and above -100 dBFS
     constexpr double maxDistanceGainDb = 24.0;
     constexpr double roomFadeSeconds = 0.05;
 
@@ -69,7 +73,13 @@ void SpatialEngine::prepare (double sampleRate, int /*maxBlockSize*/)
     fitWeight.assign (grid.size(), 1.0);
 
     stereoizer.prepare (fs);
-    detCoeff = std::exp (-tickLength / (0.15 * fs));
+    detCoeff = std::exp (-tickLength / (0.3 * fs));
+    detPeakDecay = std::pow (10.0, -2.0 * tickLength / fs); // peak hold decays 20 dB/s
+    {
+        const double w = kTwoPi * 200.0; // detector high-pass: the correlation of the bass says little
+        for (auto& f : detHp)
+            f.setAnalog (1.0 / w, 0.0, 1.0 / w, 1.0, w / std::tan (w / (2.0 * fs)));
+    }
 
     timeXover.setup (fs, timeCrossover, 0.7071);
     bassHp1.setup (fs, 80.0, 0.7071);
@@ -107,7 +117,9 @@ void SpatialEngine::reset()
         r.reset();
     stereoizer.reset();
     m2sRunning = false;
-    detAccM = detAccS = detM = detS = 0.0;
+    for (auto& f : detHp)
+        f.reset();
+    detAccL = detAccR = detAccLR = detL = detR = detLR = detPeak = 0.0;
     detMono = false;
     tickPos = 0;
     tickCounter = 0;
@@ -322,21 +334,44 @@ void SpatialEngine::runFits (bool full) noexcept
 void SpatialEngine::controlTick (bool snap) noexcept
 {
     // Mono to Stereo: active for mono sources (mono input, Input = Mono) and for stereo inputs that
-    // carry mono content (identical channels).
+    // carry mono content (identical, panned, slightly different or one-sided).
+    double foldL = 0.5, foldR = 0.5;
     {
-        detM = detCoeff * detM + (1.0 - detCoeff) * detAccM / tickLength;
-        detS = detCoeff * detS + (1.0 - detCoeff) * detAccS / tickLength;
-        detAccM = detAccS = 0.0;
-        if (detM > detectFloor)
+        const double eL = detAccL / tickLength, eR = detAccR / tickLength, eLR = detAccLR / tickLength;
+        detAccL = detAccR = detAccLR = 0.0;
+        const double level = eL + eR;
+        detPeak = std::max (level, detPeak * detPeakDecay);
+        if (level > detectFloor && level > detectGate * detPeak)
         {
-            if (detMono && detS > detM * detectStereoRatio)
-                detMono = false;
-            else if (! detMono && detS < detM * detectMonoRatio)
+            detL = detCoeff * detL + (1.0 - detCoeff) * eL;
+            detR = detCoeff * detR + (1.0 - detCoeff) * eR;
+            detLR = detCoeff * detLR + (1.0 - detCoeff) * eLR;
+            const double hi = std::max (detL, detR), lo = std::min (detL, detR);
+            const double corr = std::abs (detLR) / std::sqrt (detL * detR + 1.0e-30);
+            const bool oneSided = lo < detectOneSided * hi;
+            if (! detMono && (oneSided || corr > detectMonoCorr))
                 detMono = true;
+            else if (detMono && ! oneSided && lo > 3.0 * detectOneSided * hi && corr < detectStereoCorr)
+                detMono = false;
+        }
+        // Level-preserving fold of mono content L = a x, R = b x to a centred source:
+        // M = (a L + b R) / sqrt(2 (a^2 + b^2)) -> 0.5 L + 0.5 R for identical channels.
+        if (detL + detR > 0.0)
+        {
+            const double sum = 2.0 * (detL + detR);
+            foldL = std::sqrt (detL / sum);
+            foldR = (detLR < 0.0 ? -1.0 : 1.0) * std::sqrt (detR / sum);
         }
         const bool monoOut = numOutChannels == 1;
+        const bool m2sOn = params.monoToStereo && ! params.monoDepth && ! monoOut;
         const double monoContent = (numInChannels == 1 || detMono) ? 1.0 : 0.0;
-        sM2S.target = (params.monoToStereo && ! params.monoDepth && ! monoOut) ? std::max (1.0 - sPsi.target, monoContent) : 0.0;
+        sM2S.target = m2sOn ? std::max (1.0 - sPsi.target, monoContent) : 0.0;
+        sCentre.target = (m2sOn && numInChannels == 2 && detMono) ? 1.0 : 0.0;
+        m2sStatus = (int) (! params.monoToStereo ? MonoToStereoStatus::off
+                           : monoOut         ? MonoToStereoStatus::monoOutput
+                           : params.monoDepth ? MonoToStereoStatus::monoDepth
+                           : sM2S.target > 0.5 ? MonoToStereoStatus::active
+                                               : MonoToStereoStatus::stereoContent);
         // Mono sources widened beyond 100 % use the same Stereoizer (flat per channel, no comb).
         sWiden.target = (! params.monoDepth && ! monoOut && params.width > 100.0f) ? 1.0 - sPsi.target : 0.0;
         sKeep.target = (params.monoToStereo && params.keepMono) ? 1.0 : 0.0;
@@ -345,13 +380,13 @@ void SpatialEngine::controlTick (bool snap) noexcept
     if (snap)
     {
         for (Smooth* s : { &sLogDist, &sLogRec, &sRolloff, &sPan, &sTimePan, &sPsi, &sRho, &sMonoSafe, &sWidth, &sPropMix,
-                           &sMicB, &sAmtObs, &sAmtOcc, &sBassMix, &sOutput, &sRoomLevel, &sDecay, &sMonoDepth, &sEq, &sM2S, &sWiden, &sKeep, &sProx })
+                           &sMicB, &sAmtObs, &sAmtOcc, &sBassMix, &sOutput, &sRoomLevel, &sDecay, &sMonoDepth, &sEq, &sM2S, &sWiden, &sKeep, &sProx, &sCentre })
             s->snap();
     }
     else
     {
         for (Smooth* s : { &sLogDist, &sLogRec, &sRolloff, &sPan, &sTimePan, &sPsi, &sRho, &sMonoSafe, &sWidth, &sPropMix,
-                           &sMicB, &sAmtObs, &sAmtOcc, &sBassMix, &sOutput, &sRoomLevel, &sDecay, &sMonoDepth, &sEq, &sM2S, &sWiden, &sKeep, &sProx })
+                           &sMicB, &sAmtObs, &sAmtOcc, &sBassMix, &sOutput, &sRoomLevel, &sDecay, &sMonoDepth, &sEq, &sM2S, &sWiden, &sKeep, &sProx, &sCentre })
             s->tick (tickCoeff);
     }
 
@@ -462,8 +497,12 @@ void SpatialEngine::controlTick (bool snap) noexcept
     const double m2s = sM2S.cur;
     setRamp (rWS, monoOut ? 0.0 : w);
     setRamp (rM2SMix, std::max (m2s, sWiden.cur));
+    setRamp (rCentre, sCentre.cur);
+    setRamp (rFoldL, foldL);
+    setRamp (rFoldR, foldR);
     stereoizer.setKeepMono (sKeep.cur);
-    setRamp (rM2SSide, monoOut ? 0.0 : m2s * m2sDepth * w + (1.0 - m2s) * sWiden.cur * widenDepth * std::max (0.0, w - 1.0));
+    const double depth = lerp (m2sDepth, m2sKeepDepth, sKeep.cur);
+    setRamp (rM2SSide, monoOut ? 0.0 : m2s * depth * w + (1.0 - m2s) * sWiden.cur * widenDepth * std::max (0.0, w - 1.0));
     setRamp (rBassMix, sBassMix.cur);
 
     // --- Headphones: two virtual sources (A = M+S, B = M-S) around the azimuth.
@@ -679,7 +718,7 @@ void SpatialEngine::stepRamps() noexcept
 {
     for (Ramp* r : { &rDirect, &rGL, &rGR, &rKs, &rTauL, &rTauR, &rProp, &rPropMix, &rWS, &rBassMix, &rRho, &rHpG,
                      &rOut, &rRoomX, &rMonoOut, &rSafe, &rPsiIn, &rMonoDepth, &rMonoGain,
-                     &rM2SMix, &rM2SSide })
+                     &rM2SMix, &rM2SSide, &rCentre, &rFoldL, &rFoldR })
         r->step();
 }
 
@@ -689,10 +728,21 @@ void SpatialEngine::directPath (float xL, float xR, float& M, float& side, float
 {
     // Input: mid/side of the source. Stereo sources keep S (scaled by "stereoness" psi).
     M = 0.5f * (xL + xR);
-    const float rawS = 0.5f * (xL - xR);
+    float rawS = 0.5f * (xL - xR);
+    {
+        const float hl = detHp[0].process (xL), hr = detHp[1].process (xR);
+        detAccL += (double) hl * hl;
+        detAccR += (double) hr * hr;
+        detAccLR += (double) hl * hr;
+    }
+    if (rCentre.cur > 0.0f)
+    {
+        // Mono to Stereo on mono content of a stereo track: centred, level-preserving mono source.
+        const float c = rCentre.cur;
+        M += c * (rFoldL.cur * xL + rFoldR.cur * xR - M);
+        rawS *= 1.0f - c;
+    }
     float S = rawS * rPsiIn.cur;
-    detAccM += (double) M * M;
-    detAccS += (double) rawS * rawS;
 
     if (sMicB.cur > 0.0)
     {

@@ -921,6 +921,67 @@ int main()
         check (hi - lo < 3.5, "mono at width 200 %: per-channel response within " + std::to_string (hi - lo) + " dB");
     } });
 
+    tests.push_back ({ "14e2. Mono to Stereo: mono content on a stereo track (one-sided, panned, inverted, near-mono)", [&]
+    {
+        auto analyse = [&] (const std::vector<std::vector<float>>& o, double& corr, double& balanceDb, double& powerDb,
+                            const std::vector<std::vector<float>>& in)
+        {
+            double lr = 0, ll = 0, rr = 0, pin = 0;
+            for (size_t i = 24000; i < o[0].size(); ++i)
+            {
+                lr += (double) o[0][i] * o[1][i];
+                ll += (double) o[0][i] * o[0][i];
+                rr += (double) o[1][i] * o[1][i];
+                for (auto& ch : in)
+                    pin += (double) ch[i] * ch[i];
+            }
+            corr = lr / std::sqrt (ll * rr + 1.0e-30);
+            balanceDb = 10.0 * std::log10 ((ll + 1.0e-30) / (rr + 1.0e-30));
+            powerDb = 10.0 * std::log10 ((ll + rr) / pin);
+        };
+        const auto x = pinkNoise (48000 * 3, 71u), tiny = pinkNoise (48000 * 3, 72u);
+        std::vector<float> zero (x.size(), 0.0f), half (x.size()), inv (x.size()), nearMono (x.size());
+        for (size_t i = 0; i < x.size(); ++i)
+        {
+            half[i] = 0.5f * x[i];
+            inv[i] = -x[i];
+            nearMono[i] = x[i] + 0.02f * tiny[i];
+        }
+        EngineParams p;
+        p.monoToStereo = true;
+        p.keepMono = false;
+        struct Case { const char* name; std::vector<std::vector<float>> in; };
+        for (const auto& c : { Case { "left channel only", { x, zero } }, Case { "right channel only", { zero, x } },
+                               Case { "panned (R -6 dB)", { x, half } }, Case { "polarity-inverted right", { x, inv } },
+                               Case { "near-mono (R + noise at -34 dB)", { x, nearMono } } })
+        {
+            const auto o = render (p, c.in, 2);
+            double corr, bal, pow;
+            analyse (o, corr, bal, pow, c.in);
+            std::printf ("    %-34s corr %.2f, balance %+.2f dB, level %+.2f dB\n", c.name, corr, bal, pow);
+            check (std::abs (bal) < 0.5, std::string (c.name) + ": centred");
+            check (corr < 0.9, std::string (c.name) + ": widened");
+            near (pow, 0.0, 1.0, std::string (c.name) + ": level preserved");
+        }
+        // Engine status for the UI.
+        {
+            SpatialEngine e;
+            e.prepare (fs, 256);
+            e.setParams (p);
+            std::vector<float> l (4800), r (4800);
+            const float* ip[2] = { x.data(), pinkNoise (4800, 9u).data() };
+            auto y = pinkNoise (4800, 9u);
+            ip[1] = y.data();
+            float* op[2] = { l.data(), r.data() };
+            e.process (ip, 2, op, 2, 4800);
+            check (e.getMonoToStereoStatus() == SpatialEngine::MonoToStereoStatus::stereoContent, "status: stereo input left unchanged");
+            e.process (ip, 1, op, 2, 4800);
+            check (e.getMonoToStereoStatus() == SpatialEngine::MonoToStereoStatus::active, "status: mono input widened");
+            e.process (ip, 1, op, 1, 4800);
+            check (e.getMonoToStereoStatus() == SpatialEngine::MonoToStereoStatus::monoOutput, "status: mono output (1 -> 1)");
+        }
+    } });
+
     tests.push_back ({ "14g. Keep Mono: the voice stays mono, the recorded ambience becomes stereo", [&]
     {
         EngineParams def;
@@ -972,6 +1033,27 @@ int main()
             e += (double) x[(size_t) i] * x[(size_t) i];
         }
         check (gainToDb (worst / std::sqrt (e / n)) < -100.0, "Keep Mono does not change the mono sum");
+
+        // Room tone resumes after digital silence (transport stop, gap between clips): the room-tone
+        // estimate survives the silence, so it is widened again at once.
+        {
+            const auto tone2 = pinkNoise (48000 * 4, 55u);
+            std::vector<float> y (tone2.size());
+            for (size_t i = 0; i < y.size(); ++i)
+                y[i] = (i >= 96000 && i < 144000) ? 0.0f : 0.01f * tone2[i];
+            p.keepMono = true;
+            const auto o = render (p, { y }, 2);
+            double lr = 0, ll = 0, rr = 0;
+            for (int i = 144000 + 4800; i < 144000 + 14400; ++i) // 100-300 ms after the silence
+            {
+                lr += (double) o[0][(size_t) i] * o[1][(size_t) i];
+                ll += (double) o[0][(size_t) i] * o[0][(size_t) i];
+                rr += (double) o[1][(size_t) i] * o[1][(size_t) i];
+            }
+            const double c = lr / std::sqrt (ll * rr);
+            std::printf ("    room tone 100-300 ms after 1 s of digital silence: L/R correlation %.2f\n", c);
+            check (c < 0.85, "Keep Mono: room tone widened again right after digital silence");
+        }
     } });
 
     tests.push_back ({ "14h. Headphones: binaural reflections, coherent low-frequency tail", [&]

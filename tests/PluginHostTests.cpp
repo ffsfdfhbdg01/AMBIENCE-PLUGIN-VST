@@ -170,6 +170,43 @@ int main()
         check (d < 1.0e-6, "stereo defaults are transparent");
     }
     {
+        std::printf ("Mono to Stereo: mono track (1 -> 1), mono -> stereo, mono clip in one channel of a stereo track\n");
+        auto setOn = [] (AmbienceProcessor& p, const char* id) { p.apvts.getParameter (id)->setValueNotifyingHost (1.0f); };
+        using M2S = amb::SpatialEngine::MonoToStereoStatus;
+        AmbienceProcessor a;
+        setOn (a, "monoToStereo");
+        run (a, mono, mono, [&] (juce::AudioBuffer<float>& b) { noise (b, 0); });
+        check (a.monoToStereoStatus.load() == (int) M2S::monoOutput, "1 -> 1: reported as needing a stereo output");
+
+        AmbienceProcessor m;
+        setOn (m, "monoToStereo");
+        const auto o = run (m, mono, stereo, [&] (juce::AudioBuffer<float>& b) { noise (b, 0); }, 200); // ~2 s: room-tone estimate settled
+        check (m.monoToStereoStatus.load() == (int) M2S::active, "1 -> 2: active");
+        // Correlation below 8 kHz (white noise carries ~40 % of its energy above 15 kHz, which stays mono).
+        juce::IIRFilter fl, fr;
+        fl.setCoefficients (juce::IIRCoefficients::makeLowPass (48000.0, 8000.0));
+        fr.setCoefficients (juce::IIRCoefficients::makeLowPass (48000.0, 8000.0));
+        double lr = 0, ll = 0, rr = 0;
+        for (int i = 0; i < o.getNumSamples(); ++i)
+        {
+            const float l = fl.processSingleSampleRaw (o.getSample (0, i)), r = fr.processSingleSampleRaw (o.getSample (1, i));
+            if (i < o.getNumSamples() / 2)
+                continue;
+            lr += (double) l * r;
+            ll += (double) l * l;
+            rr += (double) r * r;
+        }
+        std::printf ("    1 -> 2 output correlation below 8 kHz: %.2f\n", lr / std::sqrt (ll * rr));
+        check (lr / std::sqrt (ll * rr) < 0.9, "1 -> 2: decorrelated stereo output");
+
+        AmbienceProcessor s;
+        setOn (s, "monoToStereo");
+        const auto os = run (s, stereo, stereo, [&] (juce::AudioBuffer<float>& b) { noise (b, 0); }); // right channel silent
+        const double el = energy (os, 0, os.getNumSamples() / 2), er = energy (os, 1, os.getNumSamples() / 2);
+        check (s.monoToStereoStatus.load() == (int) M2S::active, "left-only clip on a stereo track: detected as mono");
+        check (std::abs (10.0 * std::log10 (el / er)) < 0.5, "left-only clip on a stereo track: centred");
+    }
+    {
         std::printf ("state: sessions without Keep Mono load with it off\n");
         AmbienceProcessor p;
         juce::MemoryBlock mb;

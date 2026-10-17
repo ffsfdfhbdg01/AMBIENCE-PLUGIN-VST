@@ -65,7 +65,10 @@ public:
         envCoeff = std::exp (-1.0 / (0.010 * fs));                        // 10 ms energy envelope
         gainCoeff = std::exp (-tickSeconds / 0.015);                      // gain smoothing
         decayPerTick = std::pow (10.0, -6.0 * tickSeconds / assumedT60);  // energy decay of the tail
-        floorWindowTicks = std::max (1, (int) std::round (0.8 / tickSeconds)); // minimum statistics window
+        floorWindowTicks = std::max (1, (int) std::round (0.5 / tickSeconds)); // minimum statistics window
+        firstWindowTicks = std::max (1, (int) std::round (0.2 / tickSeconds)); // first estimate after a reset
+        onsetTicks = std::max (1, (int) std::round (0.03 / tickSeconds));      // envelope settling after silence
+        commitDelay = std::clamp ((int) std::round (0.05 / tickSeconds), 1, maxCommitDelay - 1);
         reset();
     }
 
@@ -81,8 +84,14 @@ public:
         tail.fill (0.0);
         peak.fill (0.0);
         minCur.fill (1.0e30);
-        minPrev.fill (1.0e30);
+        minPrev.fill (0.0); // no room-tone estimate until the first window has been measured
         floorTicks = 0;
+        activeTicks = 0;
+        tickPeak = 0.0;
+        windowsDone = 0;
+        historyPos = 0;
+        for (auto& h : history)
+            h.fill (0.0);
         gain.fill (1.0);
         tickPos = 0;
     }
@@ -94,6 +103,7 @@ public:
     // m: mono input. midOut: all-pass version of m (use it in place of m). sideOut: unit-scale side.
     void process (float m, float& midOut, float& sideOut) noexcept
     {
+        tickPeak = std::max (tickPeak, (double) std::abs (m));
         std::array<double, numBands> band;
         double rest = m;
         for (int e = 0; e < numEdges; ++e)
@@ -142,14 +152,26 @@ private:
     // Ambience share = (tail + floor) / energy, limited to 1.
     void updateGains() noexcept
     {
+        // The room-tone tracker only learns from settled, non-silent signal: digital silence (transport
+        // stopped, gaps between clips) and the envelope's settling after it must not pull the minimum
+        // to zero; windows count active time only, so the estimate survives pauses in playback.
+        // Values are committed with a 50 ms delay, so the moments right before a silence (filter and
+        // envelope decay) never reach the estimate.
+        activeTicks = tickPeak < 1.0e-6 ? 0 : activeTicks + 1;
+        tickPeak = 0.0;
+        const bool learn = activeTicks > onsetTicks + commitDelay;
+        const int oldest = (historyPos + 1) % (commitDelay + 1);
         for (int b = 1; b <= numEdges - 1; ++b)
         {
             const double e = env[(size_t) b];
             double& t = tail[(size_t) b];
             t = std::max (t * decayPerTick, kappa * e);
-            minCur[(size_t) b] = std::min (minCur[(size_t) b], e);
-            // Room tone: minimum over the last 0.8-1.6 s (minimum statistics, Martin 2001), with a
-            // bias factor for the minimum of a fluctuating envelope.
+            auto& hist = history[(size_t) b];
+            hist[(size_t) historyPos] = e;
+            if (learn)
+                minCur[(size_t) b] = std::min (minCur[(size_t) b], hist[(size_t) oldest]);
+            // Room tone: minimum over the last 0.5-1 s of signal (minimum statistics, Martin 2001),
+            // with a bias factor for the minimum of a fluctuating envelope.
             const double f = std::min (minCur[(size_t) b], minPrev[(size_t) b]) * floorBias;
             // Decay phase: once the band has fallen clearly below its recent peak (the peak itself
             // decaying at the room's rate), what remains is the room's reverberation, whatever the
@@ -162,8 +184,10 @@ private:
             const double target = 1.0 + keepMono * (std::sqrt (share) - 1.0);
             gain[(size_t) b] = target + gainCoeff * (gain[(size_t) b] - target);
         }
-        if (++floorTicks >= floorWindowTicks)
+        historyPos = oldest;
+        if (learn && ++floorTicks >= (windowsDone == 0 ? firstWindowTicks : floorWindowTicks))
         {
+            ++windowsDone;
             floorTicks = 0;
             minPrev = minCur;
             minCur.fill (1.0e30);
@@ -229,7 +253,7 @@ private:
     static constexpr double hilbertA[4] = { 0.6923878, 0.9360654322959, 0.9882295226860, 0.9987488452737 };
     static constexpr double hilbertB[4] = { 0.4021921162426, 0.8561710882420, 0.9722909545651, 0.9952884791278 };
     static constexpr double assumedT60 = 0.6;  // s, typical location interior (listening calibration)
-    static constexpr double kappa = 0.1;       // reverberant share of the direct energy (-10 dB)
+    static constexpr double kappa = 0.05;      // minimum reverberant share of the direct energy (-13 dB)
     static constexpr double floorBias = 2.0;   // minimum of a 10 ms energy envelope vs its mean
 
     double fs = 48000.0;
@@ -242,7 +266,11 @@ private:
     double midDelay = 0.0;
     std::array<double, numBands> env {}, tail {}, peak {}, minCur {}, minPrev {}, gain {};
     double envCoeff = 0.0, gainCoeff = 0.0, decayPerTick = 1.0, keepMono = 0.0;
-    int tickPos = 0, floorTicks = 0, floorWindowTicks = 1;
+    int tickPos = 0, floorTicks = 0, floorWindowTicks = 1, firstWindowTicks = 1, activeTicks = 0, onsetTicks = 1;
+    int windowsDone = 0, commitDelay = 1, historyPos = 0;
+    double tickPeak = 0.0;
+    static constexpr int maxCommitDelay = 512; // ticks (enough for 50 ms at 192 kHz: 300 ticks)
+    std::array<std::array<double, maxCommitDelay>, numBands> history {};
 };
 
 } // namespace amb

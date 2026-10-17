@@ -50,6 +50,7 @@ public:
     // Metering (written on the audio thread, read by the editor).
     std::atomic<float> meterPeak[2] { 0.0f, 0.0f }, meterRms[2] { 0.0f, 0.0f };
     std::atomic<float> correlation { 1.0f }, autoGainDb { 0.0f };
+    std::atomic<int> monoToStereoStatus { 0 }; // amb::SpatialEngine::MonoToStereoStatus
     std::atomic<int> uiScalePercent { 100 };
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();

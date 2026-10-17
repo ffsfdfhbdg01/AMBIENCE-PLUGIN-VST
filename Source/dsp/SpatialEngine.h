@@ -32,6 +32,17 @@ public:
     float getAutoGainDb() const noexcept { return (float) autoGainCurrentDb; }
     double getSampleRate() const noexcept { return fs; }
 
+    // Mono to Stereo state for the UI.
+    enum class MonoToStereoStatus
+    {
+        off,           // switch off
+        active,        // widening a mono source
+        stereoContent, // switch on, but the input carries real stereo: left unchanged
+        monoOutput,    // switch on, but the output is mono (1 -> 1 track): stereo impossible
+        monoDepth      // switch on, but Mono Depth (mono output) takes precedence
+    };
+    MonoToStereoStatus getMonoToStereoStatus() const noexcept { return (MonoToStereoStatus) m2sStatus; }
+
     // Model queries (used by tests and the UI).
     double airFilterDb (double freq) const noexcept;       // current air-absorption filter response
     double obstacleFilterDb (double freq) const noexcept;  // obstruction (direct path) response
@@ -100,7 +111,7 @@ private:
 
     // Smoothed control values (per tick)
     Smooth sLogDist, sLogRec, sRolloff, sPan, sTimePan, sPsi, sRho, sMonoSafe, sWidth, sPropMix,
-        sMicB, sAmtObs, sAmtOcc, sBassMix, sAutoGain, sOutput, sRoomLevel, sDecay, sMonoDepth, sEq, sM2S, sWiden, sKeep, sProx;
+        sMicB, sAmtObs, sAmtOcc, sBassMix, sAutoGain, sOutput, sRoomLevel, sDecay, sMonoDepth, sEq, sM2S, sWiden, sKeep, sProx, sCentre;
     double tickCoeff = 0.0, fastCoeff = 0.0;
 
     // Per-sample ramps
@@ -121,10 +132,17 @@ private:
     Stereoizer stereoizer;
     bool m2sRunning = false;
 
-    // Mono-content detector for Mono to Stereo on stereo inputs (e.g. a dual-mono clip on a stereo
-    // track): side vs mid energy of the raw input, with hysteresis; held during silence.
-    double detAccM = 0, detAccS = 0, detM = 0, detS = 0, detCoeff = 0;
-    bool detMono = true;
+    // Mono-content detector for Mono to Stereo on stereo inputs: a mono recording on a stereo track,
+    // identical in both channels, panned, slightly different or in one channel only. Long-term
+    // energies and cross-correlation of the high-passed channels, gated by level (pauses and fades
+    // hold the decision), with hysteresis. Mono content is folded to a centred, level-preserving
+    // mono source before it is widened.
+    FirstOrder detHp[2];
+    double detAccL = 0, detAccR = 0, detAccLR = 0, detL = 0, detR = 0, detLR = 0, detPeak = 0;
+    double detCoeff = 0, detPeakDecay = 1;
+    bool detMono = false;
+    Ramp rCentre, rFoldL, rFoldR;
+    int m2sStatus = 0;
     Svf timeXover, bassHp1, bassHp2;
     DelayLine timeLineM[1], timeLineLP[1];
     DelayLine hpLine[2];

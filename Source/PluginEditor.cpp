@@ -361,9 +361,11 @@ AmbienceEditor::AmbienceEditor (AmbienceProcessor& p)
                          "Off: only level, timing and room change; the tone stays as recorded.");
     eqAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, pid::eqAmbience, eqToggle);
     content.addAndMakeVisible (monoToStereoToggle);
-    monoToStereoToggle.setTooltip ("Mono to Stereo: a mono signal (mono track, Input = Mono, or identical channels on a stereo track) "
-                                   "becomes a natural stereo image. Mono-compatible: L + R stays the original sound, both channels keep "
-                                   "the same tone and level, bass stays centred. The amount follows Width. True stereo input is not changed.");
+    monoToStereoToggle.setTooltip ("Mono to Stereo: a mono signal becomes a natural stereo image - a mono input, Input = Mono, or mono "
+                                   "content on a stereo track (identical, panned, slightly different or in one channel only; it is centred "
+                                   "first). Mono-compatible: L + R stays the original sound, both channels keep the same tone and level, bass "
+                                   "stays centred. The amount follows Width. True stereo input is not changed. Needs a stereo output: on a "
+                                   "mono track (1 in, 1 out) use a stereo track, a stereo FX / aux channel or the Mono->Stereo version (Logic).");
     monoToStereoAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, pid::monoToStereo, monoToStereoToggle);
     content.addAndMakeVisible (keepMonoToggle);
     keepMonoToggle.setTooltip ("Keep Mono (with Mono to Stereo, on by default): the voice / direct sound stays mono in the centre and only "
@@ -566,8 +568,11 @@ void AmbienceEditor::timerCallback()
     const bool multichannel = proc.isSurroundOutput();
     renderSeg.setEnabledAll (! mono && ! multichannel);
     monoSafeToggle.setEnabled (! mono && ! multichannel);
-    monoToStereoToggle.setEnabled (! mono);
-    keepMonoToggle.setEnabled (! mono && proc.apvts.getRawParameterValue (pid::monoToStereo)->load() > 0.5f);
+    // Mono to Stereo stays clickable on mono tracks too: the status line then explains why it cannot act.
+    const bool m2sOn = proc.apvts.getRawParameterValue (pid::monoToStereo)->load() > 0.5f;
+    using M2S = amb::SpatialEngine::MonoToStereoStatus;
+    const auto m2sStatus = (M2S) proc.monoToStereoStatus.load();
+    keepMonoToggle.setEnabled (m2sOn && ! mono);
     advanced->setMonoOutput (mono);
 
     const int obstacle = (int) proc.apvts.getRawParameterValue (pid::obstacle)->load();
@@ -597,6 +602,22 @@ void AmbienceEditor::timerCallback()
         statusLabel.setText (juce::String::fromUTF8 ("OFF \xe2\x80\x94 bypassed"), juce::dontSendNotification);
         statusLabel.setColour (juce::Label::textColourId, col::warn);
     }
+    else if (m2sOn && m2sStatus == M2S::monoOutput)
+    {
+        statusLabel.setText (juce::String::fromUTF8 ("\xe2\x9a\xa0 Mono \xe2\x86\x92 Stereo needs a stereo output: this track is mono (1 in, 1 out)"),
+                             juce::dontSendNotification);
+        statusLabel.setColour (juce::Label::textColourId, col::warn);
+    }
+    else if (m2sOn && m2sStatus == M2S::monoDepth)
+    {
+        statusLabel.setText (juce::String::fromUTF8 ("Mono \xe2\x86\x92 Stereo is inactive while Mono Depth is on"), juce::dontSendNotification);
+        statusLabel.setColour (juce::Label::textColourId, col::warn);
+    }
+    else if (m2sOn && m2sStatus == M2S::stereoContent)
+    {
+        statusLabel.setText (juce::String::fromUTF8 ("Mono \xe2\x86\x92 Stereo: the input is stereo \xe2\x80\x94 left unchanged"), juce::dontSendNotification);
+        statusLabel.setColour (juce::Label::textColourId, col::textDim);
+    }
     else if (multichannel && ! monoDepth)
     {
         const int ch = proc.getOutputChannelsForUi();
@@ -613,6 +634,14 @@ void AmbienceEditor::timerCallback()
     {
         statusLabel.setText (juce::String::fromUTF8 ("\xe2\x9a\xa0 Negative correlation \xe2\x80\x94 check mono"), juce::dontSendNotification);
         statusLabel.setColour (juce::Label::textColourId, col::warn);
+    }
+    else if (m2sOn && m2sStatus == M2S::active)
+    {
+        const bool keep = proc.apvts.getRawParameterValue (pid::keepMono)->load() > 0.5f;
+        statusLabel.setText (juce::String::fromUTF8 (keep ? "MONO \xe2\x86\x92 STEREO \xe2\x80\x94 voice centred, recorded room widened (Keep Mono)"
+                                                          : "MONO \xe2\x86\x92 STEREO \xe2\x80\x94 whole signal widened"),
+                             juce::dontSendNotification);
+        statusLabel.setColour (juce::Label::textColourId, col::accent);
     }
     else if (monoDepth && ! monoTrack)
     {

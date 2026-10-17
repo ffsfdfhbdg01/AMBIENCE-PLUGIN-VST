@@ -320,6 +320,7 @@ void AmbienceProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     if (surroundIn && lfeIn >= 0 && lfeOut >= 0)
         buffer.copyFrom (lfeOut, 0, lfeBuffer, 0, 0, n);
     autoGainDb = engine.getAutoGainDb();
+    monoToStereoStatus = (int) engine.getMonoToStereoStatus();
 
     if (crossfading)
     {
