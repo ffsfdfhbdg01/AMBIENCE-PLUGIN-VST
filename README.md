@@ -39,8 +39,9 @@ Strona wydania zawiera instrukcję instalacji krok po kroku.
   - deterministyczny render, niezależny od bufora,
   - stałe ID parametrów i wersjonowany stan.
 - **Mono Depth:** tryb dla mono dialogu z planu. Wyjście jest ściśle mono (L = R), a działają tylko wskazówki głębi: odległość, powietrze, pomieszczenie (prawdziwy pogłos mono zamiast składania stereo) i przeszkoda. Bez panoramy, szerokości i różnic czasu.
-- **Mono → Stereo + Keep Mono:** zamienia sygnał mono na naturalne stereo (przełączniki w karcie *Output*). Z **Keep Mono** (domyślnie włączone) głos zostaje mono w środku, a stereo staje się tylko przestrzeń zapisana w nagraniu — pogłos po każdym słowie i szum tła pomieszczenia (bez latencji). Bez Keep Mono poszerzany jest cały sygnał. Działa na ścieżkach mono, przy *Input = Mono* oraz na ścieżkach stereo z identycznymi kanałami (dual-mono). Jest w pełni zgodne z mono: suma L+R to oryginalny dźwięk, oba kanały mają tę samą barwę i poziom, a bas zostaje w środku. Siłę efektu ustawia *Width*. Prawdziwe stereo przechodzi bez zmian.
+- **Mono → Stereo + Keep Mono:** zamienia sygnał mono na naturalne stereo (przełączniki w karcie *Output*). Z **Keep Mono** (domyślnie włączone) głos zostaje mono w środku, a stereo staje się tylko przestrzeń zapisana w nagraniu — pogłos po każdym słowie i szum tła pomieszczenia (bez latencji). Bez Keep Mono poszerzany jest cały sygnał. Działa na ścieżkach mono z wyjściem stereo (1→2), przy *Input = Mono* oraz na ścieżkach stereo, na których leży nagranie mono — także gdy jest tylko w jednym kanale (np. kanał 1 rekordera lub kamery), jest spanoramowane albo minimalnie różni się w kanałach; takie nagranie jest najpierw wyśrodkowane bez zmiany głośności. Jest w pełni zgodne z mono: suma L+R to oryginalny dźwięk, oba kanały mają tę samą barwę i poziom, a bas zostaje w środku. Siłę efektu ustawia *Width*. Prawdziwe stereo przechodzi bez zmian.
 - **Equalized Ambience** (domyślnie **włączone**): automatyczny EQ wyliczany z odległości i położenia — pochłanianie powietrza, usuwanie basu z efektu zbliżeniowego mikrofonu i delikatne przyciemnienie góry po stronie oddalonej od źródła. Po wyłączeniu zmienia się tylko poziom, czas i pomieszczenie, a barwa zostaje jak w nagraniu.
+- **EQ (panel Advanced):** trzy niezależne korektory w zakładkach — **Input** (sygnał wejściowy, zanim trafi do pomieszczenia), **Output** (całe wyjście) i **Reverb only** (tylko pogłos; dźwięk bezpośredni bez zmian). Każdy ma Low Cut i High Cut 12 dB/okt, półkę niską, filtr szczytowy i półkę wysoką, interaktywny wykres z przeciąganymi punktami i włącznik *EQ On* (A/B bez trzasków). Wszystko automatyzowalne.
 - **ON/OFF:** przycisk zasilania w lewym górnym rogu (bypass bez trzasków — sygnał przechodzi bez zmian, interfejs przygasa).
 - **Sprawdzanie aktualizacji:** ikona koła zębatego → *Check for updates…* porównuje wersję z najnowszym wydaniem na GitHubie i proponuje przejście do strony pobierania.
 - **UI:** ciemne i minimalistyczne, ze skalowaniem 50–200 % i widokiem sceny z góry, po którym przeciąga się źródło. Dodatkowo: 26 presetów filmowych, presety użytkownika, porównanie A/B, cofnij/ponów (Undo/Redo).
@@ -154,7 +155,7 @@ Presety użytkownika są zapisywane jako pliki `.ambpreset` (XML):
 | **Render: Speakers / Headphones** | *Speakers* (domyślnie) to panorama poziomem + czasem dla odsłuchu głośnikowego. *Headphones* to model binauralny głowy — tylko do słuchawek, **niezgodny z mono**. |
 | **Mono-safe** (domyślnie ON) | Ogranicza różnicę czasu do 0,3 ms i tylko poniżej 1,2 kHz. Suma mono zmienia się wtedy o ≤ 3 dB w każdej tercji. |
 | **Mono Depth** (domyślnie OFF) | Dla mono dialogu z planu: wyjście mono (L = R, na ścieżce mono jeden kanał), tylko głębia. Odległość, powietrze, pomieszczenie (dedykowane wyjście mono pogłosu — bez filtrowania grzebieniowego ze składania stereo), przeszkoda i efekt zbliżeniowy działają. Pan, Width, Time Pan i tryb Headphones są nieaktywne. Na ścieżce mono (1→1) wtyczka zawsze pracuje w ten sposób. |
-| **Mono → Stereo** (domyślnie OFF, karta *Output*) | Zamienia sygnał mono na stereo. Działa, gdy źródło jest mono: ścieżka mono (1→2), *Input = Mono* albo ścieżka stereo z identycznymi kanałami (wykrywane automatycznie, np. klip dual-mono). Metoda: pasmowa kwadratura faz M/S — w kolejnych pasmach (ok. 1 oktawa, 200 Hz – 15 kHz) jeden kanał wyprzedza drugi w fazie na przemian, więc dźwięk rozkłada się szeroko, a nie jak echo. **Suma mono = oryginał** (bez filtrowania grzebieniowego), L i P mają identyczną barwę i poziom w każdej częstotliwości, bas < 200 Hz zostaje mono. *Width* ustawia siłę: 0 % = mono, 100 % = naturalnie, 200 % = bardzo szeroko. Pan, pomieszczenie i przeszkody działają jak zwykle. Nieaktywne przy *Mono Depth* i na ścieżce mono (1→1). Prawdziwe stereo nie jest zmieniane. |
+| **Mono → Stereo** (domyślnie OFF, karta *Output*) | Zamienia sygnał mono na stereo. Działa, gdy źródło jest mono: ścieżka mono z wyjściem stereo (1→2), *Input = Mono* albo ścieżka stereo z nagraniem mono — wykrywane automatycznie, także gdy nagranie jest tylko w jednym kanale, spanoramowane lub minimalnie różne w kanałach (jest wtedy wyśrodkowane bez zmiany głośności). Linia statusu pokazuje, czy efekt działa. Metoda: pasmowa kwadratura faz M/S — w kolejnych pasmach (ok. 1 oktawa, 200 Hz – 15 kHz) jeden kanał wyprzedza drugi w fazie na przemian, więc dźwięk rozkłada się szeroko, a nie jak echo. **Suma mono = oryginał** (bez filtrowania grzebieniowego), L i P mają identyczną barwę i poziom w każdej częstotliwości, bas < 200 Hz zostaje mono. *Width* ustawia siłę: 0 % = mono, 100 % = naturalnie, 200 % = bardzo szeroko. Pan, pomieszczenie i przeszkody działają jak zwykle. Nieaktywne przy *Mono Depth*. **Ścieżka mono z wyjściem mono (1→1)** ma tylko jeden kanał wyjściowy, więc stereo jest niemożliwe — linia statusu ostrzega. Rozwiązanie: przenieś nagranie na ścieżkę stereo, wyślij je na szynę/aux stereo z wtyczką albo (Logic Pro) wybierz wariant wtyczki *Mono → Stereo*. W Reaperze i Abletonie ścieżki są stereo, więc działa od razu. Prawdziwe stereo nie jest zmieniane. |
 | **Auto Gain** (domyślnie OFF) | Kompensuje ubytek głośności wynikający z odległości, przeszkody i pomieszczenia. Przydaje się, gdy poziom ustawiasz osobno suwakiem, a wtyczki używasz tylko do barwy i przestrzeni. |
 | **Keep Mono** (domyślnie ON, karta *Output*, działa z *Mono → Stereo*) | Głos (dźwięk bezpośredni) zostaje mono w środku, a w stereo przechodzi tylko przestrzeń nagrania: pogłos pomieszczenia po każdej sylabie (faza zaniku) i szum tła (room tone). Dla każdego z 8 pasm estymator bez latencji ocenia, ile energii to pogłos/tło, i tylko tę część kieruje do sygnału stereo. Idealne do dialogu z planu: aktor zostaje w centrum, pomieszczenie się otwiera. Wyłączone: poszerzany jest cały sygnał (jak w 1.3). Suma mono w obu trybach jest identyczna. |
 | **Advanced** | Panel parametrów szczegółowych (poniżej). |
@@ -210,6 +211,33 @@ Po wyłączeniu barwa nagrania zostaje nietknięta. Przeszkody (Obstruction/Occl
 
 Ergonomia: dwuklik przywraca wartość domyślną, Ctrl/Cmd + przeciąganie daje precyzyjną regulację, kółko myszy działa na pokrętłach, a kliknięcie wartości pozwala wpisać liczbę. Podpowiedzi pojawiają się po najechaniu na kontrolkę.
 
+### EQ (dół panelu Advanced)
+![Panel Advanced z EQ](docs/img/advanced.png)
+
+Trzy niezależne korektory, między którymi przełączasz się zakładkami:
+
+| Zakładka | Co koryguje |
+|---|---|
+| **Input** | Sygnał wejściowy — przed odległością, pomieszczeniem i panoramą. Pomieszczenie „słyszy” już skorygowany dźwięk (np. usunięte dudnienie z planu nie trafia do pogłosu). |
+| **Output** | Całe wyjście wtyczki, każdy kanał (w surround wszystkie poza LFE). |
+| **Reverb only** | Tylko pomieszczenie — wczesne odbicia i pogłos. Dźwięk bezpośredni zostaje bez zmian. Przy *Room = Off* nie ma czego korygować (wykres to pokazuje). |
+
+Każdy EQ ma pięć pasm i przełącznik **EQ On**:
+- *Low Cut* — 20 Hz – 1 kHz, 12 dB/okt (20 Hz = wyłączony),
+- *Low Shelf* — 30–600 Hz, ±18 dB,
+- *Peak* — 80 Hz – 12 kHz, ±18 dB, Q 0,3–8,
+- *High Shelf* — 1–16 kHz, ±18 dB,
+- *High Cut* — 1–20 kHz, 12 dB/okt (20 kHz = wyłączony).
+
+Obsługa wykresu:
+- przeciągnij punkt (*LC, LS, P, HS, HC*): w poziomie zmienia się częstotliwość, w pionie wzmocnienie;
+- kółko myszy na punkcie *P* zmienia Q (na półce — wzmocnienie, na filtrze — częstotliwość);
+- Ctrl/Cmd daje precyzyjną regulację, a dwuklik na punkcie resetuje pasmo;
+- kropka na zakładce oznacza, że ten EQ coś zmienia;
+- *EQ On* porównuje A/B — wyłączenie płynnie wraca do neutralnego brzmienia, bez trzasków.
+
+Wszystkie 30 parametrów można automatyzować i wpisywać z klawiatury, np. „2.5k”, „120 Hz”, „off”, „Q 2”. Neutralny EQ nie przetwarza sygnału wcale. *Auto Gain* nie kompensuje EQ — korekcja zmienia poziom tak, jak ją ustawisz.
+
 ### Presety fabryczne
 Init (Neutral) · Dialogue – Close-Up / Medium Shot / Wide Shot · Across the Room · Off-Screen Left / Right · Across the Street · Far Away · Behind Closed Door · Door Ajar · Next Room (Drywall) · Neighbours (Brick Wall) · Through Concrete · Through Window · Behind Curtain · Around the Corner · Street from Inside a Car · Wide Ambience · Narrow Ambience · Mono Dialogue – Medium Shot / Wide Shot / Next Room (z włączonym Mono Depth) · Mono to Stereo / Mono to Stereo – Wide / Mono to Stereo – Dialogue in Room.
 
@@ -217,7 +245,8 @@ Wszystkie mają wyłączony Auto Gain i Output 0 dB — poziom ustawiasz w miksi
 
 ### Wskazówki do pracy przy filmie
 - **Mono dialog z planu:** włącz *Mono Depth* (lub użyj presetów *Mono Dialogue*). Ustaw *Recorded* na odległość mikrofonu, *Distance* na odległość w kadrze, wybierz pomieszczenie. Dialog oddala się bez rozlewania w stereo i bez problemów przy downmiksie.
-- **Mono na stereo:** dialog z planu — włącz *Mono → Stereo* z *Keep Mono*: aktor zostaje w środku, a pomieszczenie z nagrania staje się stereo. Efekty i atmosfery — wyłącz *Keep Mono*, żeby poszerzyć cały dźwięk. *Width* ustawia siłę (100 % naturalnie, 150–200 % szeroko). Suma mono pozostaje oryginałem, więc downmix jest bezpieczny.
+- **Mono na stereo:** dialog z planu — włącz *Mono → Stereo* z *Keep Mono*: aktor zostaje w środku, a pomieszczenie z nagrania staje się stereo. Efekty i atmosfery — wyłącz *Keep Mono*, żeby poszerzyć cały dźwięk. *Width* ustawia siłę (100 % naturalnie, 150–200 % szeroko). Suma mono pozostaje oryginałem, więc downmix jest bezpieczny. Wtyczka musi mieć wyjście stereo: na ścieżce mono z wyjściem mono (1→1) użyj ścieżki stereo albo szyny stereo (szczegóły w tabeli przełączników).
+- **EQ pogłosu:** w zakładce *Reverb only* przytnij bas pogłosu (*Low Cut* 150–300 Hz) i przyciemnij górę (*High Shelf* −3…−6 dB od ok. 5 kHz). Oddalony dialog jest wtedy czytelny, a pomieszczenie nie dudni ani nie syczy. *Input* EQ służy do korekcji nagrania przed przestrzenią, a *Output* do ogólnej barwy na końcu.
 - **Surround / Atmos:** wstaw wtyczkę na ścieżkę mono z wyjściem 5.1/7.1 (albo na szynę 5.1/7.1.x). Dialog w centrum idzie do C, a pomieszczenie wypełnia surroundy (i sufit w 7.1.4) z tym samym stosunkiem dźwięku bezpośredniego do pogłosu co w stereo.
 - **Dialog z boom/lav na plan ogólny:** ustaw *Recorded* na rzeczywistą odległość mikrofonu, *Distance* na odległość kamery, a *Room* na podobne wnętrze. Pogłos da wrażenie odległości; samo ściszenie go nie da.
 - **Zza ściany / drzwi:** wybierz *Occlusion* i materiał, a *Leak* ustaw według szczelności. Jeśli efekt ma być słyszalny, włącz Auto Gain albo podnieś poziom na suwaku — przegrody tłumią realnie 20–60 dB.

@@ -11,9 +11,11 @@ Source/dsp/        czysty C++ (bez JUCE) — silnik, modele, testowalny i render
   AcousticModels.h   ISO 9613-1, Maekawa, prawo masy / Sharp, materiały, model głowy Browna–Dudy,
                      odległość krytyczna, ważenie K (BS.1770)
   RoomModel.h        wczesne odbicia (źródła pozorne, dyfuzja) + FDN 16 linii
+  Stereoizer.h       Mono → Stereo: bank 8 pasm LR8, para Hilberta, estymator otoczenia (Keep Mono)
+  Eq.h               EQ użytkownika (Input / Output / Reverb only): 5 biquadów RBJ, wygładzanie
   Params.h           tabela parametrów (stałe ID), EngineParams, presety fabryczne
   SpatialEngine.*    kompletny tor przetwarzania
-Source/            wtyczka JUCE: procesor, stan, presety, UI (Source/ui)
+Source/            wtyczka JUCE: procesor, stan, presety, UI (Source/ui; wykres EQ: ui/EqView)
 tests/             testy akceptacyjne (PROMPT.md, sekcja 11)
 tools/             renderer offline (CLI), sygnały testowe, wykresy charakterystyk
 ```
@@ -23,8 +25,10 @@ Silnik działa próbka po próbce, a wartości sterujące liczy w **tyku kontrol
 ## 2. Tor sygnału
 
 ```
-wejście (1 lub 2 kanały)
+wejście (1, 2 lub więcej kanałów; wielokanałowe składane do stereo)
+  └─ EQ Input (L i P osobno)                            (pomieszczenie słyszy już skorygowany sygnał)
   └─ tryb Input → M = (L+R)/2, S = (L−R)/2 · ψ         (ψ: 0 = źródło mono, 1 = źródło stereo; płynnie)
+  └─ [Mono → Stereo: wyśrodkowanie treści mono ze ścieżki stereo, punkt 3.2c]
   └─ kompensacja efektu zbliżeniowego (M, S)
   └─ [opóźnienie propagacji r/c — Doppler]              (domyślnie OFF, crossfade przy przełączaniu)
   ├─ ŚCIEŻKA BEZPOŚREDNIA
@@ -32,9 +36,9 @@ wejście (1 lub 2 kanały)
   │    → Width (S stereo · w, S dekorelowane z M dla źródeł mono, Bass Mono na S)
   │    → Panner: Speakers (amplituda + czas, Mono-safe) | Headphones (model głowy), crossfade
   └─ ŚCIEŻKA POMIESZCZENIA (sygnał sprzed tłumienia odległościowego — pole pogłosowe ma stały poziom)
-       wczesne odbicia (6 źródeł pozornych / odbicie od gruntu) + FDN, poziom wg DRR
+       EQ Reverb only → wczesne odbicia (6 źródeł pozornych / odbicie od gruntu) + FDN, poziom wg DRR
   → suma → [wyjście mono: (L+R)·norm] → Occlusion (dźwięk bezpośredni + pogłos pomieszczenia źródła)
-  → Auto Gain → Output
+  → EQ Output (każdy kanał, w surround bez LFE) → Auto Gain → Output
 ```
 
 ## 3. Modele
@@ -81,9 +85,9 @@ Konwersja mono → stereo ze stałą sumą mono i bez zabarwienia kanałów (`So
 - Znak kwadratury zmienia się w pasmach ok. 1 oktawy: rozgałęzienia Linkwitza-Rileya 8. rzędu na 200, 420, 850, 1700, 3300, 6500 i 15 000 Hz. Wyjścia LP i HP filtru LR są w fazie, więc (LP − HP)/(LP + HP) jest rzeczywiste i zmienia znak na częstotliwości podziału. Ścieżka M′ przechodzi przez sumy LP + HP (wszechprzepustowe), ścieżka S przez różnice LP − HP; na skrajach S używa tylko HP (dół) i LP (góra), więc bas < 200 Hz i skrajna góra zostają mono. Na koniec para Hilberta Niemitalo (2 × 4 sekcje IIR, błąd ≤ 0,7°) ustawia S w kwadraturze względem M′.
 - Różnica faz między kanałami zmienia znak od pasma do pasma, co daje rozłożony obraz (lateralizacja zależna od częstotliwości; Orban 1970, Gerzon 1992) bez echa i bez ubytków w mono.
 - a = 0,7·Width **[kalibracja]**. Korelacja L/P dla szumu różowego: 0,81 przy 100 %, 0,41 przy 200 % (bas mono wlicza się do korelacji).
-- Aktywne, gdy źródło jest mono: wejście 1-kanałowe, *Input = Mono*, albo detektor treści mono na wejściu stereo (energia S/M < −40 dB → mono, > −30 dB → stereo, histereza, stała czasowa 150 ms, decyzja wstrzymana w ciszy < −90 dBFS). Prawdziwe stereo: test zerowy ≤ −120 dB. Przełączanie crossfade'em 30 ms.
+- Aktywne, gdy źródło jest mono: wejście 1-kanałowe, *Input = Mono*, albo detektor treści mono na wejściu stereo. **Detektor (1.5):** energie L, P i korelacja wzajemna kanałów po filtrze górnoprzepustowym 200 Hz, uśredniane ze stałą 0,3 s, ale tylko w fragmentach do 30 dB poniżej niedawnego szczytu (szczyt opada 20 dB/s) i powyżej −100 dBFS — pauzy i cisza nie zmieniają decyzji. Mono, gdy |korelacja| > 0,985 albo jeden kanał jest o ponad 40 dB cichszy (nagranie tylko w kanale 1 rekordera lub kamery); stereo, gdy korelacja < 0,95 (histereza). Rozpoznaje więc treść identyczną, spanoramowaną, minimalnie różną w kanałach, odwróconą w fazie i jednostronną. Taka treść L = a·x, P = b·x jest najpierw składana do wyśrodkowanego źródła M = (a·L + b·P)/√(2(a² + b²)) — moc jest zachowana, a dla identycznych kanałów to zwykłe (L+P)/2. Prawdziwe stereo: test zerowy ≤ −120 dB. Przełączanie crossfade'em 30 ms. Na ścieżce mono z wyjściem mono (1→1) stereo jest niemożliwe; silnik zgłasza stan (aktywne / wejście stereo / wyjście mono / Mono Depth), a linia statusu w UI go wyjaśnia.
 - **Struktura (1.4):** jawny bank 8 pasm — drzewo rozgałęzień LR8 z kompensacją all-pass, więc każde pasmo jest w fazie z sumą (M′). S = Σ ±G_b·pasmo_b (znaki naprzemienne, pasmo basowe i najwyższe pominięte), a potem para Hilberta. Ponieważ każde pasmo jest w fazie z M′, S pozostaje w kwadraturze także przy zmiennych w czasie wzmocnieniach G_b.
-- **Keep Mono:** G_b = √(udział otoczenia w paśmie b). Estymator bez latencji (co 32 próbki): obwiednia energii 10 ms; *ogon* = max(ogon·spadek T60, κ·E), T60 = 0,6 s, κ = 0,1 (−10 dB) **[kalibracja]** (model zaniku pogłosu, Lebart i in. 2001); *faza zaniku*: spadek E poniżej szczytu (który sam opada z T60) — 3 dB → bezpośredni, 9 dB → otoczenie; *tło* (room tone) = minimum z okien 0,8 s (minimum statistics, Martin 2001) × 2. Udział = max(faza zaniku, (ogon + tło)/E), wygładzany 15 ms. Test (syntetyczny dialog: sylaby + pogłos T60 0,6 s + tło −40 dB): korelacja L/P głosu 0,97 (mono), otoczenia 0,89 (pełne poszerzanie: 0,85); suma mono identyczna jak bez Keep Mono (≤ −100 dB). Starsze sesje otwierają się z Keep Mono OFF (brzmią jak w 1.3).
+- **Keep Mono:** G_b = √(udział otoczenia w paśmie b). Estymator bez latencji (co 32 próbki): obwiednia energii 10 ms; *ogon* = max(ogon·spadek T60, κ·E), T60 = 0,6 s, κ = 0,05 (−13 dB) **[kalibracja]** (model zaniku pogłosu, Lebart i in. 2001); *faza zaniku*: spadek E poniżej szczytu (który sam opada z T60) — 3 dB → bezpośredni, 9 dB → otoczenie; *tło* (room tone) = minimum z okien 0,5 s (pierwsze okno 0,2 s; minimum statistics, Martin 2001) × 2. Tło uczy się tylko z sygnału ustalonego (30 ms po wejściu z ciszy) i z opóźnieniem 50 ms (historia obwiedni), więc cyfrowa cisza nie zeruje estymaty, a poszerzanie wraca od razu po pauzie. Udział = max(faza zaniku, (ogon + tło)/E), wygładzany 15 ms. Z Keep Mono a = 1,0·Width (otoczenie poszerzane w pełni; bez Keep Mono a = 0,7·Width). Test (syntetyczny dialog: sylaby + pogłos T60 0,6 s + tło −40 dB): korelacja L/P głosu 0,95 (mono), otoczenia 0,79; tło po 0,5 s cyfrowej ciszy 0,69; suma mono identyczna jak bez Keep Mono (≤ −100 dB). Starsze sesje otwierają się z Keep Mono OFF (brzmią jak w 1.3).
 - Poszerzanie mono powyżej 100 % (punkt 3.3) używa tego samego Stereoizera; w trybie Headphones dwa wirtualne źródła rozstawia się o ±30°·Width jak dla stereo. Koszt: ok. 0,5 % rdzenia przy 48 kHz.
 
 ### 3.2d Proximity
@@ -95,6 +99,16 @@ Układy: 5.0, 5.1, 7.0, 7.1, 5.1.2, 5.1.4, 7.1.2, 7.1.4 (oraz LCR), z wejścia m
 - **Pomieszczenie:** każde odbicie jest panoramowane po pierścieniu głośników wg swojego kierunku (ściany boczne i tylna → surroundy, sufit → warstwa wysokościowa). Każdy kanał ma własny klaster dyfuzji i własny ortogonalny wiersz macierzy Hadamarda z 16 linii FDN. Moc ogona: C −6 dB, wysokościowe −1,5 dB, LFE 0; suma energii równa stereo (test: ±1 dB), więc DRR i Auto Gain są takie same jak w stereo.
 - **Mono Depth** w surround: całość w kanale C. **Bypass:** mono → C, stereo → L/R, wejście wielokanałowe → te same kanały. Wejście wielokanałowe jest składane do źródła stereo (C −3 dB do obu, surroundy i wysokościowe −6 dB), a LFE wejścia przechodzi do LFE wyjścia bez zmian.
 - Testy: `tests/EngineTests.cpp` (14j: routing, stała moc, energia względem stereo, wysokościowe, Mono Depth) oraz `tests/PluginHostTests.cpp` — procesor wtyczki w układach 1.0 … 7.1.4 (routing, LFE, bypass, migracja stanu), uruchamiany w CI.
+
+### 3.2f EQ (Input / Output / Reverb only)
+Trzy niezależne korektory użytkownika (`Source/dsp/Eq.h`), każdy z 5 sekcjami biquad RBJ liczonymi w podwójnej precyzji (TDF II):
+- *Low Cut* — górnoprzepustowy 2. rzędu Butterwortha (12 dB/okt), 20 Hz – 1 kHz, 20 Hz = wyłączony;
+- *Low Shelf* — półka niska (Q 0,707), 30–600 Hz, ±18 dB;
+- *Peak* — filtr szczytowy, 80 Hz – 12 kHz, ±18 dB, Q 0,3–8;
+- *High Shelf* — półka wysoka (Q 0,707), 1–16 kHz, ±18 dB;
+- *High Cut* — dolnoprzepustowy 12 dB/okt, 1–20 kHz, 20 kHz (lub ≥ 0,49·fs) = wyłączony.
+
+Położenie w torze: **Input** na L i P przed wszystkim (pomieszczenie i detektor Mono → Stereo słyszą skorygowany sygnał), **Reverb only** na wejściu pomieszczenia (odbicia i ogon; dźwięk bezpośredni bez zmian), **Output** na każdym kanale wyjściowym (w surround bez LFE, na ścieżce mono jeden kanał). Parametry są wygładzane w tyku kontrolnym (30 ms) w skali log-częstotliwości i dB, a współczynniki liczone tylko w trakcie zmian. *EQ On* = Off prowadzi wszystkie pasma płynnie do neutralnych (bez trzasków). Pasmo neutralne (wzmocnienie 0 dB, filtr na granicy) jest pomijane, a EQ w całości neutralny nie przetwarza sygnału — wynik jest bitowo identyczny (test). Pasmo, które się włącza, startuje ze stanu spoczynku. Wykres w UI liczy charakterystykę tymi samymi wzorami (`ParametricEq::responseDb`). *Auto Gain* celowo nie uwzględnia EQ: korekcja jest decyzją miksującego i zmienia poziom tak, jak ją ustawiono. Testy (14k): Input +6 dB przy 1 kHz (±0,1 dB) i bez zmian dwie oktawy niżej, Output Low Cut 200 Hz (50 Hz < −20 dB, 1 kHz ±0,2 dB), EQ Reverb only (półka −12 dB od 2 kHz) zmienia tylko pogłos (8 kHz −11,8 dB, 250 Hz bez zmian; przy Room = Off wyjście bitowo identyczne), przełączanie Off bez trzasków i dokładnie neutralne, ścieżka mono; testy hosta: tekst parametrów, stan i migracja, dźwięk, zakładki edytora.
 
 ### 3.3 Szerokość
 Dla źródeł stereo S jest mnożone przez Width. Źródła mono powyżej 100 % poszerza Stereoizer (punkt 3.2c): S w kwadraturze do M′, a = 1,0·(Width − 1) **[kalibracja]**, więc każdy kanał ma płaską charakterystykę, a suma mono zachowuje moduł źródła. Wcześniejszy dekorelator z all-passów Schroedera (Kendall 1995) dawał w każdym kanale filtr grzebieniowy ok. ±5 dB (efekt phasera) i został usunięty. Bass Mono to filtr górnoprzepustowy LR4 (2 × SVF Butterwortha) na S.
@@ -118,7 +132,7 @@ Dla źródeł stereo S jest mnożone przez Width. Źródła mono powyżej 100 % 
 `Thickness` skaluje masę (×k) oraz f_c (÷k). `Leak` 0–100 % odpowiada udziałowi otwartej powierzchni 0–10 % (skala logarytmiczna).
 
 ### 3.5 Auto Gain
-Model deterministyczny: przewidywana zmiana głośności ważonej krzywą K (BS.1770) dla szumu różowego. Na siatce tercjowej sumowane są analityczne charakterystyki toru (odległość, efekt zbliżeniowy, powietrze, przeszkody, panorama/model głowy, energia pomieszczenia, okluzja) i porównywane z mocą wejścia. Źródła stereo zakładają energię S/M = 0,3 **[kalibracja]**. Energia pomieszczenia liczona jest per częstotliwość: odbicia przez ich filtr (ściana + powietrze; dyfuzory są all-passami), ogon z jego widmem zmierzonym oktawowo przy pierwszym `prepare()` (raz na proces, przy 48 kHz). Błąd modelu dla wszystkich 16 przestrzeni i odległości 0,5–150 m: ±0,5 dB (test 14; wcześniej model zawyżał energię pogłosu o 4–8 dB, więc przy włączonym pomieszczeniu wynik był za cichy). Wynik jest ograniczany do ±`Auto Gain Range` i wygładzany (50 ms). Model liczony jest tylko przy włączonym Auto Gain (co 256 próbek).
+Model deterministyczny: przewidywana zmiana głośności ważonej krzywą K (BS.1770) dla szumu różowego. Na siatce tercjowej sumowane są analityczne charakterystyki toru (odległość, efekt zbliżeniowy, powietrze, przeszkody, panorama/model głowy, energia pomieszczenia, okluzja) i porównywane z mocą wejścia. Źródła stereo zakładają energię S/M = 0,3 **[kalibracja]**. Energia pomieszczenia liczona jest per częstotliwość: odbicia przez ich filtr (ściana + powietrze; dyfuzory są all-passami), ogon z jego widmem zmierzonym oktawowo przy pierwszym `prepare()` (raz na proces, przy 48 kHz). Błąd modelu dla wszystkich 16 przestrzeni i odległości 0,5–150 m: ±0,5 dB (test 14; wcześniej model zawyżał energię pogłosu o 4–8 dB, więc przy włączonym pomieszczeniu wynik był za cichy). Wynik jest ograniczany do ±`Auto Gain Range` i wygładzany (50 ms). Model liczony jest tylko przy włączonym Auto Gain (co 256 próbek). EQ użytkownika (punkt 3.2f) nie wchodzi do modelu.
 
 ## 4. Parametry
 
@@ -157,9 +171,19 @@ Model deterministyczny: przewidywana zmiana głośności ważonej krzywą K (BS.
 | monoToStereo | Mono to Stereo | Off/On | Off | przełącznik |
 | keepMono | Keep Mono | Off/On | **On** (starsze sesje: Off) | przełącznik |
 | proximity | Proximity | 0–100 % | 50 % | lin. |
+| eqInOn, eqOutOn, eqRevOn | Input / Output / Reverb EQ On | Off/On | On | przełącznik |
+| eq{In,Out,Rev}LowCut | … EQ Low Cut | 20–1000 Hz (20 = Off) | Off | log |
+| eq{In,Out,Rev}LowShelfFreq | … EQ Low Shelf Freq | 30–600 Hz | 100 Hz | log |
+| eq{In,Out,Rev}LowShelfGain | … EQ Low Shelf Gain | ±18 dB | 0 | lin. |
+| eq{In,Out,Rev}PeakFreq | … EQ Peak Freq | 80–12 000 Hz | 1 kHz | log |
+| eq{In,Out,Rev}PeakGain | … EQ Peak Gain | ±18 dB | 0 | lin. |
+| eq{In,Out,Rev}PeakQ | … EQ Peak Q | 0,3–8 | 1 | log |
+| eq{In,Out,Rev}HighShelfFreq | … EQ High Shelf Freq | 1–16 kHz | 8 kHz | log |
+| eq{In,Out,Rev}HighShelfGain | … EQ High Shelf Gain | ±18 dB | 0 | lin. |
+| eq{In,Out,Rev}HighCut | … EQ High Cut | 1–20 kHz (20 k = Off) | Off | log |
 | bypass | Bypass | Off/On | Off | przełącznik (bypass hosta, crossfade 20 ms) |
 
-Przełączniki są zaimplementowane jako dwustanowe parametry wyboru. Ich znormalizowana wartość jest kwantowana, więc odtworzony stan jest dokładny (wymóg pluginval). Stan wtyczki ma atrybut `stateVersion` (obecnie 2) oraz przechowuje skalę UI i nazwę presetu. Parametry, których nie ma w zapisanym stanie (np. dodane w nowszej wersji), dostają wartości domyślne.
+Przełączniki są zaimplementowane jako dwustanowe parametry wyboru. Ich znormalizowana wartość jest kwantowana, więc odtworzony stan jest dokładny (wymóg pluginval). Stan wtyczki ma atrybut `stateVersion` (obecnie 2) oraz przechowuje skalę UI i nazwę presetu. Parametry, których nie ma w zapisanym stanie (np. dodane w nowszej wersji), dostają wartości domyślne — starsze sesje otwierają się z neutralnym EQ. Tekst wartości EQ: „Off” na granicy filtrów, „120 Hz”, „2.50 kHz”, „Q 1.00”; wpisywanie przyjmuje też „2.5k”, „off” i „Q 2”.
 
 ## 5. Weryfikacja (stan na ostatni commit)
 
