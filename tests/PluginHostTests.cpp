@@ -1,9 +1,11 @@
 // Host-level tests of the plugin processor: channel layouts (mono ... 7.1.4), routing, bypass,
-// LFE pass-through and state. Built from the plugin sources as a console app (no plugin binary).
+// LFE pass-through, state, the EQ parameters and the editor. Built from the plugin sources as a console
+// app (no plugin binary).
 #include <cstdio>
 #include <functional>
 #include <string>
 
+#include "../Source/PluginEditor.h"
 #include "../Source/PluginProcessor.h"
 
 namespace
@@ -224,6 +226,122 @@ int main()
         q.setStateInformation (old.getData(), (int) old.getSize());
         check (q.apvts.getRawParameterValue ("keepMono")->load() < 0.5f, "Keep Mono off for older sessions");
         check (AmbienceProcessor().apvts.getRawParameterValue ("keepMono")->load() > 0.5f, "Keep Mono on for new instances");
+    }
+    {
+        std::printf ("EQ: parameter text, state, audio and the editor tabs\n");
+        AmbienceProcessor p;
+        auto* lowCut = p.apvts.getParameter ("eqInLowCut");
+        auto* highCut = p.apvts.getParameter ("eqOutHighCut");
+        auto* peakFreq = p.apvts.getParameter ("eqRevPeakFreq");
+        auto* peakQ = p.apvts.getParameter ("eqInPeakQ");
+        check (lowCut->getCurrentValueAsText() == "Off" && highCut->getCurrentValueAsText() == "Off", "cut filters show Off at their limits");
+        check (peakQ->getCurrentValueAsText() == "Q 1.00", "Q shown as Q 1.00");
+        auto plain = [] (juce::RangedAudioParameter* q, const juce::String& text) { return q->convertFrom0to1 (q->getValueForText (text)); };
+        check (std::abs (plain (peakFreq, "2.5k") - 2500.0f) < 1.0f && std::abs (plain (peakFreq, "2.5 kHz") - 2500.0f) < 1.0f, "\"2.5k\" / \"2.5 kHz\" = 2500 Hz");
+        check (std::abs (plain (lowCut, "120 Hz") - 120.0f) < 0.5f, "\"120 Hz\" = 120 Hz");
+        check (plain (highCut, "off") > 19999.0f && plain (lowCut, "Off") < 20.01f, "\"off\" switches a cut filter off");
+        check (std::abs (plain (peakQ, "Q 2.5") - 2.5f) < 0.01f, "\"Q 2.5\" = 2.5");
+        peakFreq->setValueNotifyingHost (peakFreq->convertTo0to1 (2500.0f));
+        check (peakFreq->getCurrentValueAsText() == "2.50 kHz", "2500 Hz shown as 2.50 kHz");
+
+        // State round trip, and older sessions (no EQ parameters) load a neutral EQ.
+        auto setPlain = [] (AmbienceProcessor& q, const char* id, float v)
+        {
+            auto* par = q.apvts.getParameter (id);
+            par->setValueNotifyingHost (par->convertTo0to1 (v));
+        };
+        setPlain (p, "eqRevHighShelfGain", -6.0f);
+        setPlain (p, "eqOutOn", 0.0f);
+        juce::MemoryBlock mb;
+        p.getStateInformation (mb);
+        AmbienceProcessor r;
+        r.setStateInformation (mb.getData(), (int) mb.getSize());
+        check (std::abs (r.apvts.getRawParameterValue ("eqRevHighShelfGain")->load() + 6.0f) < 0.01f
+                   && r.apvts.getRawParameterValue ("eqOutOn")->load() < 0.5f,
+               "EQ settings restored from the session");
+        auto xml = juce::AudioProcessor::getXmlFromBinary (mb.getData(), (int) mb.getSize());
+        juce::Array<juce::XmlElement*> eqParams;
+        for (auto* e : xml->getChildWithTagNameIterator ("PARAM"))
+            if (const auto id = e->getStringAttribute ("id"); id.startsWith ("eqIn") || id.startsWith ("eqOut") || id.startsWith ("eqRev"))
+                eqParams.add (e);
+        check (eqParams.size() == 30, "30 EQ parameters stored");
+        for (auto* e : eqParams)
+            xml->removeChildElement (e, true);
+        juce::MemoryBlock old;
+        juce::AudioProcessor::copyXmlToBinary (*xml, old);
+        AmbienceProcessor o;
+        setPlain (o, "eqRevHighShelfGain", 3.0f);
+        o.setStateInformation (old.getData(), (int) old.getSize());
+        check (std::abs (o.apvts.getRawParameterValue ("eqRevHighShelfGain")->load()) < 0.01f && o.apvts.getRawParameterValue ("eqOutOn")->load() > 0.5f,
+               "sessions without the EQ load it neutral");
+
+        // Output high cut at 1 kHz on white noise: most of the energy goes; switched off it is transparent again.
+        auto runEq = [&] (bool on)
+        {
+            AmbienceProcessor q;
+            setPlain (q, "eqOutHighCut", 1000.0f);
+            setPlain (q, "eqOutOn", on ? 1.0f : 0.0f);
+            juce::AudioBuffer<float> in (2, 40 * 512);
+            int pos = 0;
+            const auto out = run (q, stereo, stereo, [&] (juce::AudioBuffer<float>& b)
+            {
+                noise (b, 0);
+                b.copyFrom (1, 0, b, 0, 0, b.getNumSamples());
+                in.copyFrom (0, pos, b, 0, 0, b.getNumSamples());
+                pos += b.getNumSamples();
+            });
+            double d = 0;
+            for (int i = 0; i < out.getNumSamples(); ++i)
+                d = std::max (d, (double) std::abs (out.getSample (0, i) - in.getSample (0, i)));
+            return std::make_pair (10.0 * std::log10 (energy (out, 0) / energy (in, 0)), d);
+        };
+        const auto [cutDb, cutDiff] = runEq (true);
+        const auto [offDb, offDiff] = runEq (false);
+        std::printf ("    output high cut 1 kHz on white noise: %.1f dB (EQ off: max difference %.2g)\n", cutDb, offDiff);
+        check (cutDb < -10.0, "output EQ high cut removes the highs");
+        check (offDiff < 1.0e-6, "output EQ switched off: transparent");
+        juce::ignoreUnused (cutDiff, offDb);
+
+        // Editor: the EQ section, its three tabs, the On switch follows the selected tab.
+        std::unique_ptr<juce::AudioProcessorEditor> editor (p.createEditor());
+        std::function<ui::EqSection*(juce::Component&)> find = [&] (juce::Component& c) -> ui::EqSection*
+        {
+            if (auto* e = dynamic_cast<ui::EqSection*> (&c))
+                return e;
+            for (auto* child : c.getChildren())
+                if (auto* e = find (*child))
+                    return e;
+            return nullptr;
+        };
+        auto* section = find (*editor);
+        check (section != nullptr, "editor has the EQ section");
+        if (section != nullptr)
+        {
+            juce::TextButton* tabs[3] = {};
+            juce::ToggleButton* onSwitch = nullptr;
+            for (auto* child : section->getChildren())
+            {
+                if (auto* t = dynamic_cast<juce::TextButton*> (child))
+                    for (int i = 0; i < 3; ++i)
+                        if (t->getButtonText() == juce::StringArray { "INPUT", "OUTPUT", "REVERB ONLY" }[i])
+                            tabs[i] = t;
+                if (auto* t = dynamic_cast<juce::ToggleButton*> (child))
+                    onSwitch = t;
+            }
+            check (tabs[0] != nullptr && tabs[1] != nullptr && tabs[2] != nullptr && onSwitch != nullptr, "three EQ tabs and an On switch");
+            if (tabs[0] != nullptr && tabs[1] != nullptr && tabs[2] != nullptr && onSwitch != nullptr)
+            {
+                check (tabs[0]->getToggleState() && onSwitch->getToggleState(), "Input tab selected first, EQ on");
+                tabs[1]->onClick(); // Output: switched off above
+                check (tabs[1]->getToggleState() && ! tabs[0]->getToggleState() && ! onSwitch->getToggleState(), "Output tab shows the Output EQ state (off)");
+                tabs[2]->onClick();
+                onSwitch->setToggleState (false, juce::sendNotificationSync);
+                check (p.apvts.getRawParameterValue ("eqRevOn")->load() < 0.5f && p.apvts.getRawParameterValue ("eqInOn")->load() > 0.5f,
+                       "On switch of the Reverb tab drives only the Reverb EQ");
+                const auto image = editor->createComponentSnapshot (editor->getLocalBounds());
+                check (image.isValid(), "editor paints with the EQ");
+            }
+        }
     }
     std::printf ("\n%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

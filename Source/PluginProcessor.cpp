@@ -29,6 +29,15 @@ juce::String formatValue (const amb::ParamSpec& s, float v)
     if (id == amb::pid::temperature)
         return juce::String (v, 1) + juce::String::fromUTF8 (" \xc2\xb0""C");
     juce::String unit (s.unit);
+    if (unit == "Hz")
+    {
+        // EQ cut filters at their limits are off.
+        if ((id.endsWith ("LowCut") && v <= s.minValue + 0.5f) || (id.endsWith ("HighCut") && v >= s.maxValue - 1.0f))
+            return "Off";
+        return v < 1000.0f ? fixed (v, 0) + " Hz" : juce::String (v / 1000.0f, v < 10000.0f ? 2 : 1) + " kHz";
+    }
+    if (unit == "Q")
+        return "Q " + juce::String (v, 2);
     const int decimals = (unit == "dB" || unit == "dB/dd") ? 1 : 0;
     if (unit == "dB" && v > 0.05f)
         return "+" + fixed (v, decimals) + " dB";
@@ -72,9 +81,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout AmbienceProcessor::createLay
                 auto attrs = juce::AudioParameterFloatAttributes()
                                  .withLabel (s.unit)
                                  .withStringFromValueFunction ([spec] (float v, int) { return formatValue (spec, v); })
-                                 .withValueFromStringFunction ([] (const juce::String& t)
+                                 .withValueFromStringFunction ([spec] (const juce::String& t)
                                                                {
                                                                    auto str = t.trim();
+                                                                   if (juce::String (spec.unit) == "Hz")
+                                                                   {
+                                                                       // "Off", "120", "120 Hz", "1.5k", "1.5 kHz"
+                                                                       if (str.startsWithIgnoreCase ("off"))
+                                                                           return juce::String (spec.id).endsWith ("HighCut") ? spec.maxValue : spec.minValue;
+                                                                       const float f = str.getFloatValue();
+                                                                       return str.containsIgnoreCase ("k") ? f * 1000.0f : f;
+                                                                   }
+                                                                   if (str.startsWithIgnoreCase ("Q"))
+                                                                       return str.substring (1).trim().getFloatValue();
+                                                                   if (juce::String (spec.id) != amb::pid::pan)
+                                                                       return str.getFloatValue();
                                                                    if (str.equalsIgnoreCase ("C"))
                                                                        return 0.0f;
                                                                    if (str.startsWithIgnoreCase ("L"))

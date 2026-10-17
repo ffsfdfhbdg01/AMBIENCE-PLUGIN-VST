@@ -73,6 +73,9 @@ void SpatialEngine::prepare (double sampleRate, int /*maxBlockSize*/)
     fitWeight.assign (grid.size(), 1.0);
 
     stereoizer.prepare (fs);
+    inputEq.prepare (fs);
+    reverbEq.prepare (fs);
+    outputEq.prepare (fs);
     detCoeff = std::exp (-tickLength / (0.3 * fs));
     detPeakDecay = std::pow (10.0, -2.0 * tickLength / fs); // peak hold decays 20 dB/s
     {
@@ -117,6 +120,9 @@ void SpatialEngine::reset()
         r.reset();
     stereoizer.reset();
     m2sRunning = false;
+    inputEq.reset();
+    reverbEq.reset();
+    outputEq.reset();
     for (auto& f : detHp)
         f.reset();
     detAccL = detAccR = detAccLR = detL = detR = detLR = detPeak = 0.0;
@@ -160,6 +166,9 @@ void SpatialEngine::computeTargets() noexcept
     sRoomLevel.target = std::clamp ((double) p.roomLevel, -24.0, 12.0);
     sDecay.target = std::clamp ((double) p.decay, 50.0, 200.0) / 100.0;
     sProx.target = std::clamp ((double) p.proximity, 0.0, 100.0) / 100.0;
+    inputEq.setTarget (p.eqIn);
+    reverbEq.setTarget (p.eqRev);
+    outputEq.setTarget (p.eqOut);
     sAutoGain.target = p.autoGain ? autoGainTargetDb : 0.0;
     sMonoDepth.target = (p.monoDepth || monoOut) ? 1.0 : 0.0;
 
@@ -391,6 +400,9 @@ void SpatialEngine::controlTick (bool snap) noexcept
     }
 
     runFits (snap);
+    inputEq.tick (tickCoeff, snap);
+    reverbEq.tick (tickCoeff, snap);
+    outputEq.tick (tickCoeff, snap);
     air.setTargetFromFit (1.0);
     obstruction.setTargetFromFit (sAmtObs.cur);
     occlusion.setTargetFromFit (sAmtOcc.cur);
@@ -726,6 +738,11 @@ void SpatialEngine::stepRamps() noexcept
 // obstruction, width / Stereoizer and bass mono. Returns the direct mid, the side and the room feed.
 void SpatialEngine::directPath (float xL, float xR, float& M, float& side, float& roomIn) noexcept
 {
+    if (inputEq.isActive())
+    {
+        xL = inputEq.process (0, xL);
+        xR = numInChannels > 1 ? inputEq.process (1, xR) : xL;
+    }
     // Input: mid/side of the source. Stereo sources keep S (scaled by "stereoness" psi).
     M = 0.5f * (xL + xR);
     float rawS = 0.5f * (xL - xR);
@@ -761,7 +778,7 @@ void SpatialEngine::directPath (float xL, float xR, float& M, float& side, float
         S += rPropMix.cur * (sd - S);
     }
 
-    roomIn = M;
+    roomIn = reverbEq.isActive() ? reverbEq.process (0, M) : M;
 
     // Direct path: distance gain, air absorption, obstruction.
     M *= rDirect.cur;
@@ -902,6 +919,12 @@ void SpatialEngine::processSample (float xL, float xR, float& oL, float& oR) noe
         R = numOutChannels == 1 ? L : occlusion.process (1, R);
     }
 
+    if (outputEq.isActive())
+    {
+        L = outputEq.process (0, L);
+        R = numOutChannels == 1 ? L : outputEq.process (1, R);
+    }
+
     oL = L * rOut.cur;
     oR = R * rOut.cur;
 }
@@ -960,8 +983,14 @@ void SpatialEngine::processSampleSurround (float xL, float xR, float* outs) noex
         for (int c = 0; c < nCh; ++c)
             outs[c] = occlusion.process (c, outs[c]);
 
+    const bool eqOn = outputEq.isActive();
     for (int c = 0; c < nCh; ++c)
-        outs[c] = outLayout.speakers[(size_t) c].lfe ? 0.0f : outs[c] * rOut.cur;
+    {
+        if (outLayout.speakers[(size_t) c].lfe)
+            outs[c] = 0.0f;
+        else
+            outs[c] = (eqOn ? outputEq.process (c, outs[c]) : outs[c]) * rOut.cur;
+    }
 }
 
 //==============================================================================

@@ -84,6 +84,7 @@ if(AMBIENCE_BUILD_PLUGIN)
         Source/PluginEditor.cpp
         Source/PresetManager.cpp
         Source/UpdateChecker.cpp
+        Source/ui/EqView.cpp
         Source/ui/LookAndFeel.cpp
         Source/ui/StageView.cpp
         Source/ui/Meters.cpp)
@@ -118,6 +119,7 @@ if(AMBIENCE_BUILD_PLUGIN)
             Source/PluginEditor.cpp
             Source/PresetManager.cpp
             Source/UpdateChecker.cpp
+            Source/ui/EqView.cpp
             Source/ui/LookAndFeel.cpp
             Source/ui/StageView.cpp
             Source/ui/Meters.cpp)

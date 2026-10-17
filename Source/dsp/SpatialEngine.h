@@ -126,6 +126,9 @@ private:
     DelayLine propLine[2];
     FittedCascade<2> air, obstruction;
     FittedCascade<maxOutputChannels> occlusion;
+    ParametricEq<2> inputEq;                  // EQ tab "Input": the signal entering the plugin
+    ParametricEq<1> reverbEq;                 // EQ tab "Reverb only": the room feed (reverb is linear)
+    ParametricEq<maxOutputChannels> outputEq; // EQ tab "Output": every output channel
     SpeakerLayout outLayout;
     bool surround = false;
     std::array<Ramp, maxOutputChannels> rFront {};

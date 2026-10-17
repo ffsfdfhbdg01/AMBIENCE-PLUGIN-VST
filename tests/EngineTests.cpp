@@ -1229,6 +1229,92 @@ int main()
                "Mono Depth: centre channel only");
     } });
 
+    tests.push_back ({ "14k. EQ: input, output, reverb only", [&]
+    {
+        auto levelAt = [&] (const EngineParams& p, double f, int ch = 0)
+        {
+            const auto o = render (p, { sine (f, fs, 48000) }, 2);
+            return gainToDb (rms (o[(size_t) ch].data() + 9600, 38000));
+        };
+        auto base = dryParams();
+        const double ref1k = levelAt (base, 1000), ref100 = levelAt (base, 100), ref50 = levelAt (base, 50);
+
+        // Input EQ: +6 dB peak at 1 kHz.
+        auto p = base;
+        p.eqIn.peakGain = 6.0f;
+        p.eqIn.peakFreq = 1000.0f;
+        near (levelAt (p, 1000) - ref1k, 6.0, 0.1, "input EQ: +6 dB at the peak");
+        near (levelAt (p, 100) - ref100, 0.0, 0.3, "input EQ: unchanged two octaves below");
+        p.eqIn.on = false;
+        near (levelAt (p, 1000) - ref1k, 0.0, 0.01, "input EQ off: neutral");
+
+        // Output EQ: low cut at 200 Hz (12 dB/oct).
+        p = base;
+        p.eqOut.lowCut = 200.0f;
+        check (levelAt (p, 50) - ref50 < -20.0, "output EQ: low cut removes 50 Hz (" + std::to_string (levelAt (p, 50) - ref50) + " dB)");
+        near (levelAt (p, 1000) - ref1k, 0.0, 0.2, "output EQ: 1 kHz unchanged by the low cut");
+
+        // Reverb EQ: only the reverb changes; with Room Off the output is identical.
+        const auto x = pinkNoise (48000 * 2);
+        p = base;
+        p.eqRev.highShelfGain = -12.0f;
+        p.eqRev.highShelfFreq = 2000.0f;
+        {
+            const auto a = render (base, { x }, 2), b = render (p, { x }, 2);
+            check (maxAbsDiff (a[0], b[0]) == 0.0 && maxAbsDiff (a[1], b[1]) == 0.0, "reverb EQ: no room -> output identical");
+        }
+        {
+            std::vector<float> imp (48000, 0.0f);
+            imp[0] = 1.0f;
+            auto roomOn = base;
+            roomOn.room = 7;
+            roomOn.distance = 4;
+            auto roomEq = roomOn;
+            roomEq.eqRev = p.eqRev;
+            auto roomOff = roomOn;
+            roomOff.room = 0;
+            const auto dry = render (roomOff, { imp }, 2), wet = render (roomOn, { imp }, 2), wetEq = render (roomEq, { imp }, 2);
+            std::vector<float> rv ((size_t) imp.size()), rvEq ((size_t) imp.size());
+            for (size_t i = 0; i < imp.size(); ++i)
+            {
+                rv[i] = wet[0][i] - dry[0][i];
+                rvEq[i] = wetEq[0][i] - dry[0][i];
+            }
+            const double d8k = 10.0 * std::log10 (octaveEnergy (rvEq, 8000.0, fs) / octaveEnergy (rv, 8000.0, fs));
+            const double d250 = 10.0 * std::log10 (octaveEnergy (rvEq, 250.0, fs) / octaveEnergy (rv, 250.0, fs));
+            std::printf ("    reverb EQ (high shelf -12 dB @ 2 kHz): reverb 8 kHz %+.1f dB, 250 Hz %+.1f dB\n", d8k, d250);
+            check (d8k < -10.0 && std::abs (d250) < 1.0, "reverb EQ shapes only the reverb");
+        }
+
+        // Switching an EQ off while playing: click-free, then exactly neutral.
+        {
+            auto on = base;
+            on.eqOut.peakGain = 9.0f;
+            on.eqOut.lowCut = 120.0f;
+            auto off = on;
+            off.eqOut.on = false;
+            std::vector<std::pair<int, EngineParams>> automation { { 24000, off } };
+            const auto sw = render (on, { sine (440, fs, 96000) }, 2, fs, 256, &automation);
+            double maxStep = 0;
+            for (size_t i = 1; i < sw[0].size(); ++i)
+                maxStep = std::max (maxStep, (double) std::abs (sw[0][i] - sw[0][i - 1]));
+            check (maxStep < 0.05, "EQ off: no click (max step " + std::to_string (maxStep) + ")");
+            const auto ref = render (base, { sine (440, fs, 96000) }, 2);
+            double tail = 0;
+            for (size_t i = 72000; i < sw[0].size(); ++i)
+                tail = std::max (tail, (double) std::abs (sw[0][i] - ref[0][i]));
+            check (tail < 1.0e-6, "EQ off: exactly neutral after the glide");
+        }
+
+        // Mono output (1 -> 1): the output EQ applies.
+        {
+            auto q = base;
+            q.eqOut.highCut = 2000.0f;
+            const auto o = render (q, { sine (8000, fs, 48000) }, 1), r = render (base, { sine (8000, fs, 48000) }, 1);
+            check (gainToDb (rms (o[0].data() + 9600, 38000) / rms (r[0].data() + 9600, 38000)) < -18.0, "output EQ on a mono track");
+        }
+    } });
+
     tests.push_back ({ "15. CPU benchmark (informative, processing only)", [&]
     {
         const int n = 48000 * 10, block = 512;

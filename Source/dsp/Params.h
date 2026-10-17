@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "Eq.h"
+
 namespace amb
 {
 enum class ParamKind
@@ -70,6 +72,23 @@ namespace pid
     inline constexpr const char* monoToStereo = "monoToStereo";
     inline constexpr const char* keepMono = "keepMono";
     inline constexpr const char* proximity = "proximity";
+    // Three-tab EQ (Advanced): input, output, reverb only. IDs are part of the saved state.
+    struct EqIds
+    {
+        const char* on;
+        const char* lowCut;
+        const char* lowShelfFreq;
+        const char* lowShelfGain;
+        const char* peakFreq;
+        const char* peakGain;
+        const char* peakQ;
+        const char* highShelfFreq;
+        const char* highShelfGain;
+        const char* highCut;
+    };
+    inline constexpr EqIds eqIn { "eqInOn", "eqInLowCut", "eqInLowShelfFreq", "eqInLowShelfGain", "eqInPeakFreq", "eqInPeakGain", "eqInPeakQ", "eqInHighShelfFreq", "eqInHighShelfGain", "eqInHighCut" };
+    inline constexpr EqIds eqOut { "eqOutOn", "eqOutLowCut", "eqOutLowShelfFreq", "eqOutLowShelfGain", "eqOutPeakFreq", "eqOutPeakGain", "eqOutPeakQ", "eqOutHighShelfFreq", "eqOutHighShelfGain", "eqOutHighCut" };
+    inline constexpr EqIds eqRev { "eqRevOn", "eqRevLowCut", "eqRevLowShelfFreq", "eqRevLowShelfGain", "eqRevPeakFreq", "eqRevPeakGain", "eqRevPeakQ", "eqRevHighShelfFreq", "eqRevHighShelfGain", "eqRevHighCut" };
 } // namespace pid
 
 inline const std::vector<ParamSpec>& paramSpecs()
@@ -114,6 +133,36 @@ inline const std::vector<ParamSpec>& paramSpecs()
         { pid::monoToStereo, "Mono to Stereo", K::toggle, 0, 1, 0, 1, S::linear, "", {} },
         { pid::keepMono, "Keep Mono", K::toggle, 0, 1, 1, 1, S::linear, "", {} },
         { pid::proximity, "Proximity", K::floating, 0, 100, 50, 0.1f, S::linear, "%", {} },
+        { pid::eqIn.on, "Input EQ On", K::toggle, 0, 1, 1, 1, S::linear, "", {} },
+        { pid::eqIn.lowCut, "Input EQ Low Cut", K::floating, 20, 1000, 20, 0, S::logarithmic, "Hz", {} },
+        { pid::eqIn.lowShelfFreq, "Input EQ Low Shelf Freq", K::floating, 30, 600, 100, 0, S::logarithmic, "Hz", {} },
+        { pid::eqIn.lowShelfGain, "Input EQ Low Shelf Gain", K::floating, -18, 18, 0, 0.1f, S::linear, "dB", {} },
+        { pid::eqIn.peakFreq, "Input EQ Peak Freq", K::floating, 80, 12000, 1000, 0, S::logarithmic, "Hz", {} },
+        { pid::eqIn.peakGain, "Input EQ Peak Gain", K::floating, -18, 18, 0, 0.1f, S::linear, "dB", {} },
+        { pid::eqIn.peakQ, "Input EQ Peak Q", K::floating, 0.3f, 8, 1, 0, S::logarithmic, "Q", {} },
+        { pid::eqIn.highShelfFreq, "Input EQ High Shelf Freq", K::floating, 1000, 16000, 8000, 0, S::logarithmic, "Hz", {} },
+        { pid::eqIn.highShelfGain, "Input EQ High Shelf Gain", K::floating, -18, 18, 0, 0.1f, S::linear, "dB", {} },
+        { pid::eqIn.highCut, "Input EQ High Cut", K::floating, 1000, 20000, 20000, 0, S::logarithmic, "Hz", {} },
+        { pid::eqOut.on, "Output EQ On", K::toggle, 0, 1, 1, 1, S::linear, "", {} },
+        { pid::eqOut.lowCut, "Output EQ Low Cut", K::floating, 20, 1000, 20, 0, S::logarithmic, "Hz", {} },
+        { pid::eqOut.lowShelfFreq, "Output EQ Low Shelf Freq", K::floating, 30, 600, 100, 0, S::logarithmic, "Hz", {} },
+        { pid::eqOut.lowShelfGain, "Output EQ Low Shelf Gain", K::floating, -18, 18, 0, 0.1f, S::linear, "dB", {} },
+        { pid::eqOut.peakFreq, "Output EQ Peak Freq", K::floating, 80, 12000, 1000, 0, S::logarithmic, "Hz", {} },
+        { pid::eqOut.peakGain, "Output EQ Peak Gain", K::floating, -18, 18, 0, 0.1f, S::linear, "dB", {} },
+        { pid::eqOut.peakQ, "Output EQ Peak Q", K::floating, 0.3f, 8, 1, 0, S::logarithmic, "Q", {} },
+        { pid::eqOut.highShelfFreq, "Output EQ High Shelf Freq", K::floating, 1000, 16000, 8000, 0, S::logarithmic, "Hz", {} },
+        { pid::eqOut.highShelfGain, "Output EQ High Shelf Gain", K::floating, -18, 18, 0, 0.1f, S::linear, "dB", {} },
+        { pid::eqOut.highCut, "Output EQ High Cut", K::floating, 1000, 20000, 20000, 0, S::logarithmic, "Hz", {} },
+        { pid::eqRev.on, "Reverb EQ On", K::toggle, 0, 1, 1, 1, S::linear, "", {} },
+        { pid::eqRev.lowCut, "Reverb EQ Low Cut", K::floating, 20, 1000, 20, 0, S::logarithmic, "Hz", {} },
+        { pid::eqRev.lowShelfFreq, "Reverb EQ Low Shelf Freq", K::floating, 30, 600, 100, 0, S::logarithmic, "Hz", {} },
+        { pid::eqRev.lowShelfGain, "Reverb EQ Low Shelf Gain", K::floating, -18, 18, 0, 0.1f, S::linear, "dB", {} },
+        { pid::eqRev.peakFreq, "Reverb EQ Peak Freq", K::floating, 80, 12000, 1000, 0, S::logarithmic, "Hz", {} },
+        { pid::eqRev.peakGain, "Reverb EQ Peak Gain", K::floating, -18, 18, 0, 0.1f, S::linear, "dB", {} },
+        { pid::eqRev.peakQ, "Reverb EQ Peak Q", K::floating, 0.3f, 8, 1, 0, S::logarithmic, "Q", {} },
+        { pid::eqRev.highShelfFreq, "Reverb EQ High Shelf Freq", K::floating, 1000, 16000, 8000, 0, S::logarithmic, "Hz", {} },
+        { pid::eqRev.highShelfGain, "Reverb EQ High Shelf Gain", K::floating, -18, 18, 0, 0.1f, S::linear, "dB", {} },
+        { pid::eqRev.highCut, "Reverb EQ High Cut", K::floating, 1000, 20000, 20000, 0, S::logarithmic, "Hz", {} },
     };
     return specs;
 }
@@ -160,6 +209,7 @@ struct EngineParams
     bool monoToStereo = false; // mono signal in -> mono-compatible stereo out (amount follows Width)
     bool keepMono = true;      // with Mono to Stereo: only the recorded ambience is widened, the voice stays mono
     float proximity = 50;      // listener/mic position: 0 = room centre (far from walls), 100 = near a wall corner
+    EqParams eqIn, eqOut, eqRev; // three-tab EQ: input, output (all channels), reverb only (room feed)
 
     // Sets a value by parameter ID (plain units). Unknown IDs are ignored.
     void set (const std::string& id, float v)
@@ -199,6 +249,22 @@ struct EngineParams
         else if (id == pid::monoToStereo) monoToStereo = b();
         else if (id == pid::keepMono) keepMono = b();
         else if (id == pid::proximity) proximity = v;
+        else if (id.rfind ("eq", 0) == 0)
+        {
+            for (auto [ids, eq] : { std::pair { &pid::eqIn, &eqIn }, std::pair { &pid::eqOut, &eqOut }, std::pair { &pid::eqRev, &eqRev } })
+            {
+                if (id == ids->on) { eq->on = b(); return; }
+                if (id == ids->lowCut) { eq->lowCut = v; return; }
+                if (id == ids->lowShelfFreq) { eq->lowShelfFreq = v; return; }
+                if (id == ids->lowShelfGain) { eq->lowShelfGain = v; return; }
+                if (id == ids->peakFreq) { eq->peakFreq = v; return; }
+                if (id == ids->peakGain) { eq->peakGain = v; return; }
+                if (id == ids->peakQ) { eq->peakQ = v; return; }
+                if (id == ids->highShelfFreq) { eq->highShelfFreq = v; return; }
+                if (id == ids->highShelfGain) { eq->highShelfGain = v; return; }
+                if (id == ids->highCut) { eq->highCut = v; return; }
+            }
+        }
     }
 };
 

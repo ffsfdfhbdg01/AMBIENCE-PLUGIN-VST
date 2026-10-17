@@ -147,7 +147,8 @@ public:
                          "100 % = near a wall or corner (strong reflections right after the direct sound). 50 % = default position."),
           thicknessKnob (p.apvts, pid::thickness, "Thickness", "Scales the partition mass (and its coincidence frequency)."),
           leakKnob (p.apvts, pid::leak, "Leak", "Gaps and cracks (open area 0-10 %, logarithmic). Let the brighter part of the sound through, e.g. the gap under a door."),
-          agRangeKnob (p.apvts, pid::autoGainRange, "AG Range", "Maximum auto gain compensation.")
+          agRangeKnob (p.apvts, pid::autoGainRange, "AG Range", "Maximum auto gain compensation."),
+          eqSection (p.apvts)
     {
         for (auto* k : { &recKnob, &rolloffKnob, &timePanKnob, &tempKnob, &humidityKnob, &decayKnob, &proximityKnob, &thicknessKnob, &leakKnob, &agRangeKnob })
             addAndMakeVisible (k);
@@ -175,6 +176,7 @@ public:
 
         closeBtn.onClick = [this] { if (onClose) onClose(); };
         addAndMakeVisible (closeBtn);
+        addAndMakeVisible (eqSection);
     }
 
     void paint (juce::Graphics& g) override
@@ -203,22 +205,22 @@ public:
         auto b = getLocalBounds().reduced (16, 12);
         closeBtn.setBounds (b.removeFromTop (22).removeFromRight (70));
         b.removeFromTop (6);
-        const int kw = 96, kh = 92;
+        const int kw = 96, kh = 76;
 
         auto section = [&] (const juce::String& name, std::initializer_list<juce::Component*> knobs)
         {
-            sectionLabels.push_back ({ name, b.removeFromTop (18) });
+            sectionLabels.push_back ({ name, b.removeFromTop (16) });
             auto row = b.removeFromTop (kh);
             for (auto* k : knobs)
                 k->setBounds (row.removeFromLeft (kw).reduced (4, 0));
-            b.removeFromTop (8);
+            b.removeFromTop (6);
             return row;
         };
 
         auto r1 = section ("DISTANCE", { &recKnob, &rolloffKnob, &tempKnob, &humidityKnob });
         {
             r1.removeFromLeft (8);
-            micBox.setBounds (r1.removeFromTop (58).removeFromBottom (26).removeFromLeft (150));
+            micBox.setBounds (r1.removeFromTop (46).removeFromBottom (26).removeFromLeft (150));
             comboLabels.push_back ({ "MIC PATTERN", &micBox });
             airToggle.setBounds (r1.removeFromTop (26).removeFromLeft (150));
         }
@@ -226,15 +228,19 @@ public:
         {
             r2.removeFromLeft (8);
             auto c1 = r2.removeFromLeft (130);
-            panLawBox.setBounds (c1.removeFromTop (58).removeFromBottom (26).reduced (0, 0).withWidth (120));
+            panLawBox.setBounds (c1.removeFromTop (46).removeFromBottom (26).withWidth (120));
             comboLabels.push_back ({ "PAN LAW", &panLawBox });
             auto c2 = r2.removeFromLeft (130);
-            bassMonoBox.setBounds (c2.removeFromTop (58).removeFromBottom (26).withWidth (120));
+            bassMonoBox.setBounds (c2.removeFromTop (46).removeFromBottom (26).withWidth (120));
             comboLabels.push_back ({ "BASS MONO", &bassMonoBox });
-            propToggle.setBounds (r2.removeFromTop (58).removeFromBottom (26).withWidth (170));
+            propToggle.setBounds (r2.removeFromTop (46).removeFromBottom (26).withWidth (170));
         }
         section ("ROOM, OBSTACLE & GAIN", { &decayKnob, &proximityKnob, &thicknessKnob, &leakKnob, &agRangeKnob });
+        b.removeFromTop (4);
+        eqSection.setBounds (b);
     }
+
+    void setRoomOff (bool off) { eqSection.setRoomOff (off); }
 
     void setMonoOutput (bool mono)
     {
@@ -248,6 +254,7 @@ public:
 private:
     AmbienceProcessor& proc;
     ui::Knob recKnob, rolloffKnob, timePanKnob, tempKnob, humidityKnob, decayKnob, proximityKnob, thicknessKnob, leakKnob, agRangeKnob;
+    ui::EqSection eqSection;
     juce::ComboBox panLawBox, micBox, bassMonoBox;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> panLawAtt, micAtt, bassMonoAtt;
     juce::ToggleButton airToggle { "Air Absorption" }, propToggle { "Propagation Delay" };
@@ -581,6 +588,7 @@ void AmbienceEditor::timerCallback()
     sizeKnob.setVisible (obstacle == 1);
     amountKnob.setEnabled (obstacle != 0);
     roomLevelKnob.setEnabled (proc.apvts.getRawParameterValue (pid::room)->load() > 0.5f);
+    advanced->setRoomOff (proc.apvts.getRawParameterValue (pid::room)->load() < 0.5f);
 
     const bool powered = powerBtn.getToggleState();
     for (juce::Component* c : { (juce::Component*) &stage, (juce::Component*) &positionCard, (juce::Component*) &roomCard, (juce::Component*) &obstacleCard,

@@ -4,6 +4,7 @@
 
 #include "PluginProcessor.h"
 #include "UpdateChecker.h"
+#include "ui/EqView.h"
 #include "ui/LookAndFeel.h"
 #include "ui/Meters.h"
 #include "ui/StageView.h"
