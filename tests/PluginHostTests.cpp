@@ -207,6 +207,39 @@ int main()
         const double el = energy (os, 0, os.getNumSamples() / 2), er = energy (os, 1, os.getNumSamples() / 2);
         check (s.monoToStereoStatus.load() == (int) M2S::active, "left-only clip on a stereo track: detected as mono");
         check (std::abs (10.0 * std::log10 (el / er)) < 0.5, "left-only clip on a stereo track: centred");
+
+        // Cubase / Nuendo: a mono track routed to a stereo group arrives as L = R at -3 dB (equal-power pan law).
+        AmbienceProcessor g;
+        setOn (g, "monoToStereo");
+        double inMid = 0; // (L + R) / 2 of the input = L
+        const auto og = run (g, stereo, stereo, [&] (juce::AudioBuffer<float>& b)
+        {
+            noise (b, 0);
+            b.applyGain (0, 0, b.getNumSamples(), 0.70710678f);
+            b.copyFrom (1, 0, b, 0, 0, b.getNumSamples());
+            inMid += energy (b, 0);
+        }, 200);
+        check (g.monoToStereoStatus.load() == (int) M2S::active, "mono track into a stereo group: Mono to Stereo active");
+        juce::IIRFilter gl, gr;
+        gl.setCoefficients (juce::IIRCoefficients::makeLowPass (48000.0, 8000.0));
+        gr.setCoefficients (juce::IIRCoefficients::makeLowPass (48000.0, 8000.0));
+        double glr = 0, gll = 0, grr = 0;
+        for (int i = 0; i < og.getNumSamples(); ++i)
+        {
+            const float l = gl.processSingleSampleRaw (og.getSample (0, i)), r = gr.processSingleSampleRaw (og.getSample (1, i));
+            if (i < og.getNumSamples() / 2)
+                continue;
+            glr += (double) l * r;
+            gll += (double) l * l;
+            grr += (double) r * r;
+        }
+        double outMid = 0;
+        for (int i = 0; i < og.getNumSamples(); ++i)
+            outMid += 0.25 * juce::square ((double) og.getSample (0, i) + og.getSample (1, i));
+        std::printf ("    mono track into a stereo group: correlation below 8 kHz %.2f, mono sum %+.2f dB\n", glr / std::sqrt (gll * grr),
+                     10.0 * std::log10 (outMid / inMid));
+        check (glr / std::sqrt (gll * grr) < 0.9, "mono track into a stereo group: stereo output");
+        check (std::abs (10.0 * std::log10 (outMid / inMid)) < 0.5, "mono track into a stereo group: mono sum keeps its level");
     }
     {
         std::printf ("state: sessions without Keep Mono load with it off\n");

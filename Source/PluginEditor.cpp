@@ -354,6 +354,19 @@ AmbienceEditor::AmbienceEditor (AmbienceProcessor& p)
     statusLabel.setFont (ui::AmbienceLookAndFeel::font (11.5f, true));
     statusLabel.setJustificationType (juce::Justification::centredLeft);
     statusLabel.setInterceptsMouseClicks (false, false);
+    {
+        // A mono track's inserts are mono in most hosts even when the track feeds a stereo output (the host
+        // converts to stereo in its panner, after the inserts), so say where the plug-in has to go instead.
+        const juce::PluginHostType host;
+        if (host.isCubase() || host.isNuendo())
+            monoInsertWarning = juce::String (host.isNuendo() ? "Nuendo" : "Cubase")
+                                + juce::String::fromUTF8 (": inserts on a mono track are mono \xe2\x80\x94 route the track to a stereo Group");
+        else if (host.isLogic() || host.isGarageBand() || host.isMainStage())
+            monoInsertWarning = juce::String::fromUTF8 ("This insert is mono \xe2\x80\x94 choose the Mono \xe2\x86\x92 Stereo version of the plug-in");
+        else
+            monoInsertWarning = juce::String::fromUTF8 ("This insert is mono (1 in, 1 out) \xe2\x80\x94 use a stereo track or a stereo bus");
+        monoInsertWarning = juce::String::fromUTF8 ("\xe2\x9a\xa0 ") + monoInsertWarning;
+    }
 
     // Main
     content.addAndMakeVisible (stage);
@@ -371,8 +384,11 @@ AmbienceEditor::AmbienceEditor (AmbienceProcessor& p)
     monoToStereoToggle.setTooltip ("Mono to Stereo: a mono signal becomes a natural stereo image - a mono input, Input = Mono, or mono "
                                    "content on a stereo track (identical, panned, slightly different or in one channel only; it is centred "
                                    "first). Mono-compatible: L + R stays the original sound, both channels keep the same tone and level, bass "
-                                   "stays centred. The amount follows Width. True stereo input is not changed. Needs a stereo output: on a "
-                                   "mono track (1 in, 1 out) use a stereo track, a stereo FX / aux channel or the Mono->Stereo version (Logic).");
+                                   "stays centred. The amount follows Width. True stereo input is not changed. Needs a stereo insert: on a mono "
+                                   "track the insert itself is mono (1 in, 1 out) even when the track goes to a stereo output - Cubase and "
+                                   "Nuendo turn it into stereo only in the panner, after the inserts. Route the track to a stereo Group (Cubase: "
+                                   "right-click > Add Group Channel to Selected Channels) and insert the plug-in there, put the clip on a "
+                                   "stereo track, or use the Mono->Stereo version (Logic).");
     monoToStereoAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, pid::monoToStereo, monoToStereoToggle);
     content.addAndMakeVisible (keepMonoToggle);
     keepMonoToggle.setTooltip ("Keep Mono (with Mono to Stereo, on by default): the voice / direct sound stays mono in the centre and only "
@@ -612,8 +628,7 @@ void AmbienceEditor::timerCallback()
     }
     else if (m2sOn && m2sStatus == M2S::monoOutput)
     {
-        statusLabel.setText (juce::String::fromUTF8 ("\xe2\x9a\xa0 Mono \xe2\x86\x92 Stereo needs a stereo output: this track is mono (1 in, 1 out)"),
-                             juce::dontSendNotification);
+        statusLabel.setText (monoInsertWarning, juce::dontSendNotification);
         statusLabel.setColour (juce::Label::textColourId, col::warn);
     }
     else if (m2sOn && m2sStatus == M2S::monoDepth)

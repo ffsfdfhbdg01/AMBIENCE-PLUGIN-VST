@@ -127,6 +127,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> monoSafeAtt, autoGainAtt, monoDepthAtt, eqAtt, monoToStereoAtt, keepMonoAtt;
     juce::TextButton advancedBtn { "Advanced" };
     juce::Label statusLabel;
+    juce::String monoInsertWarning; // status text when Mono to Stereo sits on a mono (1 in, 1 out) insert, per host
 
     // Main
     ui::StageView stage;
